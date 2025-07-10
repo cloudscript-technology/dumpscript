@@ -1,266 +1,144 @@
 # DumpScript
 
-Unified system for backup and restore of MySQL and PostgreSQL databases to Amazon S3.
+Database dump and restore tool with configurable client versions.
 
-## Architecture
+## Features
 
-- **Dockerfile.dump**: Container for database backup (dump)
-- **Dockerfile.restore**: Container for database restore
-- Support for MySQL and PostgreSQL
-- Automatic upload/download to/from Amazon S3
-- Configuration via environment variables
+- Support for PostgreSQL and MySQL/MariaDB databases
+- **Runtime configurable database client versions** - No need to rebuild images
+- Automatic S3 upload of database dumps
+- AWS IAM role support for secure access
+- Kubernetes CronJob deployment via Helm chart
+- Containerized execution with Alpine Linux
 
-## Prerequisites
+## Database Client Versions
 
-- Docker installed
-- AWS credentials configured
-- Access to databases (MySQL or PostgreSQL)
-- S3 bucket created
+### PostgreSQL
+Supported versions: `13`, `14`, `15`, `16`, `17`
 
-## Build Images
-
-```bash
-# Backup image
-docker build -f Dockerfile.dump -t backup-db .
-
-# Restore image
-docker build -f Dockerfile.restore -t restore-db .
+The client version should match your PostgreSQL server version to avoid compatibility issues like:
+```
+pg_dump: error: aborting because of server version mismatch
+pg_dump: detail: server version: 16.2; pg_dump version: 15.13
 ```
 
-## Backup (Dump)
+### MySQL/MariaDB
+Supported versions: 
+- `8.0` - MySQL 8.0
+- `10.11` - MariaDB 10.11 (default)
+- `11.4` - MariaDB 11.4
 
-### Required Environment Variables
+## Usage
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `DB_TYPE` | Database type: `mysql` or `postgresql` | `postgresql` |
-| `DB_HOST` | Database host | `host.docker.internal` |
-| `DB_USER` | Database user | `postgres` |
-| `DB_PASSWORD` | Database password | `mypassword` |
-| `DB_NAME` | Database name | `mydb` |
-| `AWS_ACCESS_KEY_ID` | AWS Access Key | `AKIAIOSFODNN7EXAMPLE` |
-| `AWS_SECRET_ACCESS_KEY` | AWS Secret Key | `wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY` |
-| `AWS_REGION` | AWS Region | `us-east-1` |
-| `S3_BUCKET` | S3 bucket name | `my-backup-bucket` |
-| `S3_PREFIX` | S3 prefix/folder | `backups/production` |
+### Environment Variables
 
-### Optional Variables
+#### Required
+- `DB_TYPE` - Database type (`postgresql` or `mysql`)
+- `DB_HOST` - Database host
+- `DB_USER` - Database username
+- `DB_PASSWORD` - Database password
+- `DB_NAME` - Database name
+- `AWS_REGION` - AWS region for S3
+- `S3_BUCKET` - S3 bucket name
+- `S3_PREFIX` - S3 prefix for dumps
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `DB_PORT` | Database port | MySQL: `3306`, PostgreSQL: `5432` |
-| `AWS_SESSION_TOKEN` | AWS session token (for temporary roles) | - |
-| `AWS_ROLE_ARN` | Role ARN for assume role | - |
-| `DUMP_OPTIONS` | Specific options for mysqldump/pg_dump | - |
+#### Optional
+- `POSTGRES_VERSION` - PostgreSQL client version (default: `16`)
+- `MYSQL_VERSION` - MySQL/MariaDB client version (default: `10.11`)
+- `DB_PORT` - Database port (default: 5432 for PostgreSQL, 3306 for MySQL)
+- `AWS_ROLE_ARN` - AWS IAM role ARN for authentication
+- `DUMP_OPTIONS` - Additional options for `pg_dump` or `mysqldump`
 
-### Backup Examples
+### Docker Example
 
-#### PostgreSQL
 ```bash
+# PostgreSQL 16 dump
 docker run --rm \
   -e DB_TYPE=postgresql \
-  -e DB_HOST=host.docker.internal \
-  -e DB_PORT=5432 \
-  -e DB_USER=postgres \
-  -e DB_PASSWORD=mypassword \
+  -e POSTGRES_VERSION=16 \
+  -e DB_HOST=localhost \
+  -e DB_USER=user \
+  -e DB_PASSWORD=password \
   -e DB_NAME=mydb \
-  -e AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE \
-  -e AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY \
-  -e AWS_SESSION_TOKEN=IQoJb3JpASDFFGVjELb//////////EXAMPLETOKEN \
   -e AWS_REGION=us-east-1 \
-  -e S3_BUCKET=my-backup-bucket \
-  -e S3_PREFIX=backups/postgresql \
-  -e DUMP_OPTIONS="--format plain --encoding UTF8 --no-owner --no-privileges" \
-  backup-db
-```
+  -e S3_BUCKET=my-backups \
+  -e S3_PREFIX=postgresql-dumps \
+  ghcr.io/cloudscript-technology/dumpscript:latest
 
-#### MySQL
-```bash
+# MySQL 8.0 dump
 docker run --rm \
   -e DB_TYPE=mysql \
-  -e DB_HOST=host.docker.internal \
-  -e DB_PORT=3306 \
-  -e DB_USER=root \
-  -e DB_PASSWORD=mypassword \
+  -e MYSQL_VERSION=8.0 \
+  -e DB_HOST=localhost \
+  -e DB_USER=user \
+  -e DB_PASSWORD=password \
   -e DB_NAME=mydb \
-  -e AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE \
-  -e AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY \
-  -e AWS_SESSION_TOKEN=IQoJb3JpASDFFGVjELb//////////EXAMPLETOKEN \
   -e AWS_REGION=us-east-1 \
-  -e S3_BUCKET=my-backup-bucket \
-  -e S3_PREFIX=backups/mysql \
-  -e DUMP_OPTIONS="--single-transaction --routines --triggers --set-gtid-purged=OFF" \
-  backup-db
+  -e S3_BUCKET=my-backups \
+  -e S3_PREFIX=mysql-dumps \
+  ghcr.io/cloudscript-technology/dumpscript:latest
 ```
 
-## Restore
+### Helm Chart Example
 
-### Required Environment Variables
-
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `DB_TYPE` | Database type: `mysql` or `postgresql` | `postgresql` |
-| `DB_HOST` | Database host | `host.docker.internal` |
-| `DB_USER` | Database user | `postgres` |
-| `DB_PASSWORD` | Database password | `mypassword` |
-| `DB_NAME` | Database name | `mydb` |
-| `AWS_ACCESS_KEY_ID` | AWS Access Key | `AKIAIOSFODNN7EXAMPLE` |
-| `AWS_SECRET_ACCESS_KEY` | AWS Secret Key | `wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY` |
-| `AWS_REGION` | AWS Region | `us-east-1` |
-| `S3_BUCKET` | S3 bucket name | `my-backup-bucket` |
-| `S3_KEY` | Full S3 file path | `backups/production/dump_20250710_143004.sql.gz` |
-
-### Optional Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `DB_PORT` | Database port | MySQL: `3306`, PostgreSQL: `5432` |
-| `CREATE_DB` | Create database before restore (`1` for yes) | - |
-| `AWS_SESSION_TOKEN` | AWS session token | - |
-| `AWS_ROLE_ARN` | Role ARN for assume role | - |
-
-### Restore Examples
-
-#### PostgreSQL
-```bash
-docker run --rm \
-  -e DB_TYPE=postgresql \
-  -e DB_HOST=host.docker.internal \
-  -e DB_PORT=5432 \
-  -e DB_USER=postgres \
-  -e DB_PASSWORD=mypassword \
-  -e DB_NAME=mydb_restore \
-  -e AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE \
-  -e AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY \
-  -e AWS_SESSION_TOKEN=IQoJb3JpASDFFGVjELb//////////EXAMPLETOKEN \
-  -e AWS_REGION=us-east-1 \
-  -e S3_BUCKET=my-backup-bucket \
-  -e S3_KEY=backups/postgresql/dump_20250710_143004.sql.gz \
-  -e CREATE_DB=1 \
-  restore-db
+```yaml
+databases:
+  - type: postgresql
+    version: "16"  # Matches PostgreSQL server version
+    connectionInfo:
+      host: "postgres.example.com"
+      username: "backup_user"
+      password: "secure_password"
+      database: "production_db"
+      port: 5432
+    aws:
+      region: "us-east-1"
+      bucket: "my-db-backups"
+      bucketPrefix: "postgresql/production"
+      roleArn: "arn:aws:iam::123456789012:role/DatabaseBackupRole"
+    schedule: "0 2 * * *"  # Daily at 2 AM
+    extraArgs: "--no-owner --no-acl"
+    
+  - type: mysql
+    version: "8.0"  # Matches MySQL server version
+    connectionInfo:
+      host: "mysql.example.com"
+      username: "backup_user"
+      password: "secure_password"  
+      database: "app_db"
+      port: 3306
+    aws:
+      region: "us-east-1"
+      bucket: "my-db-backups"
+      bucketPrefix: "mysql/app"
+      roleArn: "arn:aws:iam::123456789012:role/DatabaseBackupRole"
+    schedule: "0 3 * * *"  # Daily at 3 AM
+    extraArgs: "--single-transaction --routines"
 ```
 
-#### MySQL
-```bash
-docker run --rm \
-  -e DB_TYPE=mysql \
-  -e DB_HOST=host.docker.internal \
-  -e DB_PORT=3306 \
-  -e DB_USER=root \
-  -e DB_PASSWORD=mypassword \
-  -e DB_NAME=mydb_restore \
-  -e AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE \
-  -e AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY \
-  -e AWS_SESSION_TOKEN=IQoJb3JpASDFFGVjELb//////////EXAMPLETOKEN \
-  -e AWS_REGION=us-east-1 \
-  -e S3_BUCKET=my-backup-bucket \
-  -e S3_KEY=backups/mysql/dump_20250710_143004.sql.gz \
-  -e CREATE_DB=1 \
-  restore-db
-```
+## How It Works
 
-## Recommended DUMP_OPTIONS
+1. **Runtime Installation**: When the container starts, it reads the `POSTGRES_VERSION` or `MYSQL_VERSION` environment variable
+2. **Dynamic Client Installation**: The appropriate database client is installed using Alpine's package manager
+3. **Version Verification**: The installation is verified and client version is logged
+4. **Database Operations**: The original dump/restore scripts are executed with the correct client version
 
-### PostgreSQL (pg_dump)
-```bash
-# Complete dump with UTF8 encoding
---format plain --encoding UTF8 --no-owner --no-privileges
-
-# Schema only
---schema-only --format plain --encoding UTF8
-
-# Data only
---data-only --format plain --encoding UTF8
-
-# With compression (don't use with script's gzip)
---format custom --compress 9
-```
-
-### MySQL (mysqldump)
-```bash
-# Complete dump with transaction
---single-transaction --routines --triggers --set-gtid-purged=OFF
-
-# Schema only
---no-data --routines --triggers
-
-# Data only
---no-create-info --skip-triggers
-
-# With specific charset
---default-character-set=utf8mb4
-```
-
-## File Format
-
-Backup files are saved to S3 in the format:
-```
-s3://YOUR_BUCKET/YOUR_PREFIX/dump_YYYYMMDD_HHMMSS.sql.gz
-```
-
-Example:
-```
-s3://my-backup-bucket/backups/postgresql/dump_20250710_143004.sql.gz
-```
-
-## AWS Permissions
-
-The AWS user/role needs the following permissions:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "s3:GetObject",
-        "s3:PutObject",
-        "s3:ListBucket"
-      ],
-      "Resource": [
-        "arn:aws:s3:::my-backup-bucket",
-        "arn:aws:s3:::my-backup-bucket/*"
-      ]
-    }
-  ]
-}
-```
-
-## Troubleshooting
-
-### S3 403 Error
-- Check if AWS credentials are correct
-- Verify user has permissions on the bucket
-- Check if bucket exists and is in the correct region
-
-### Database Connection Error
-- Check if the host is accessible from the container
-- For local databases, use `host.docker.internal` (Mac/Windows) or `172.17.0.1` (Linux)
-- Verify database credentials are correct
-
-### File Not Found in S3
-- Check if the full path (`S3_KEY`) is correct
-- List bucket objects: `aws s3 ls s3://my-bucket/my-prefix/`
-
-## Automation
-
-For use in CI/CD pipelines or cron jobs, you can create shell scripts or use tools like Kubernetes CronJob:
+## Building
 
 ```bash
-#!/bin/bash
-# backup-daily.sh
+# Build dump image
+docker build -t dumpscript:latest -f docker/Dockerfile.dump .
 
-docker run --rm \
-  -e DB_TYPE=postgresql \
-  -e DB_HOST=my-rds.amazonaws.com \
-  -e DB_USER=$DB_USER \
-  -e DB_PASSWORD=$DB_PASSWORD \
-  -e DB_NAME=production \
-  -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
-  -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
-  -e AWS_REGION=us-east-1 \
-  -e S3_BUCKET=production-backups \
-  -e S3_PREFIX=daily \
-  backup-db
-``` 
+# Build restore image  
+docker build -t dumpscript-restore:latest -f docker/Dockerfile.restore .
+```
+
+## Files
+
+- `docker/Dockerfile.dump` - Dump container image
+- `docker/Dockerfile.restore` - Restore container image
+- `scripts/dump_db_to_s3.sh` - Database dump script
+- `scripts/restore_db_from_s3.sh` - Database restore script
+- `scripts/install_db_clients.sh` - Dynamic client installation script
+- `scripts/entrypoint_dump.sh` - Dump container entrypoint
+- `scripts/entrypoint_restore.sh` - Restore container entrypoint 

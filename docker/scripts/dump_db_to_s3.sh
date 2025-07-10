@@ -29,15 +29,6 @@ case "$DB_TYPE" in
     ;;
 esac
 
-# AWS Auth
-export AWS_REGION
-if [ -n "$AWS_ROLE_ARN" ]; then
-  CREDS=$(aws sts assume-role --role-arn "$AWS_ROLE_ARN" --role-session-name "db-dump-session")
-  export AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r .Credentials.AccessKeyId)
-  export AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r .Credentials.SecretAccessKey)
-  export AWS_SESSION_TOKEN=$(echo $CREDS | jq -r .Credentials.SessionToken)
-fi
-
 aws s3 cp "$DUMP_FILE_GZ" "s3://$S3_BUCKET/$S3_PREFIX/$DUMP_FILE_GZ"
 
 rm "$DUMP_FILE_GZ"
