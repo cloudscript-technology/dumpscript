@@ -1,0 +1,16 @@
+FROM alpine:3.20
+
+RUN apk add --no-cache \
+    postgresql15-client \
+    mysql-client \
+    aws-cli \
+    jq \
+    gzip \
+    bash
+
+ENV PATH="/usr/bin:${PATH}"
+
+COPY ../scripts/dump_db_to_s3.sh /usr/local/bin/dump_db_to_s3.sh
+RUN chmod +x /usr/local/bin/dump_db_to_s3.sh
+
+ENTRYPOINT ["/usr/local/bin/dump_db_to_s3.sh"]
