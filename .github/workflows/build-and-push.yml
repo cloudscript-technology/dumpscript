@@ -62,22 +62,14 @@ jobs:
         echo "" >> changelog.md
         
         # Get commit messages since last tag
-        git log ${LATEST_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges >> changelog.md
-        
-        # Use a unique delimiter to avoid conflicts
-        DELIMITER=$(openssl rand -hex 8)
-        echo "changelog<<${DELIMITER}" >> $GITHUB_OUTPUT
-        cat changelog.md >> $GITHUB_OUTPUT
-        echo "${DELIMITER}" >> $GITHUB_OUTPUT
+        git log ${LATEST_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges >> changelog.md || echo "- Initial release" >> changelog.md
 
     - name: Create Release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ steps.version.outputs.tag }}
-        release_name: Release ${{ steps.version.outputs.tag }}
-        body: ${{ steps.changelog.outputs.changelog }}
+        name: Release ${{ steps.version.outputs.tag }}
+        body_path: changelog.md
         draft: false
         prerelease: false
 
