@@ -17,25 +17,44 @@ if [ -n "$AWS_ROLE_ARN" ]; then
   
   # Verificar se o token do service account está disponível
   if [ -f "/var/run/secrets/eks.amazonaws.com/serviceaccount/token" ]; then
-    export AWS_WEB_IDENTITY_TOKEN_FILE="/var/run/secrets/eks.amazonaws.com/serviceaccount/token"
+    echo "Token do service account encontrado"
+    
+    # Ler o token do arquivo
+    WEB_IDENTITY_TOKEN=$(cat /var/run/secrets/eks.amazonaws.com/serviceaccount/token)
+    if [ -z "$WEB_IDENTITY_TOKEN" ]; then
+      echo "Erro: Token do service account está vazio"
+      exit 1
+    fi
+    
     export AWS_ROLE_SESSION_NAME="dumpscript-$(date +%s)"
     
     # Assumir a role usando o token do service account
     echo "Assumindo role usando IRSA..."
+    echo "Role ARN: $AWS_ROLE_ARN"
+    echo "Role Session Name: $AWS_ROLE_SESSION_NAME"
+    
     TEMP_ROLE=$(aws sts assume-role-with-web-identity \
       --role-arn "$AWS_ROLE_ARN" \
       --role-session-name "$AWS_ROLE_SESSION_NAME" \
-      --web-identity-token-file "$AWS_WEB_IDENTITY_TOKEN_FILE" \
+      --web-identity-token "$WEB_IDENTITY_TOKEN" \
       --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' \
       --output text)
     
-    export AWS_ACCESS_KEY_ID=$(echo $TEMP_ROLE | cut -d' ' -f1)
-    export AWS_SECRET_ACCESS_KEY=$(echo $TEMP_ROLE | cut -d' ' -f2)
-    export AWS_SESSION_TOKEN=$(echo $TEMP_ROLE | cut -d' ' -f3)
-    
-    echo "Role assumida com sucesso!"
+    if [ $? -ne 0 ]; then
+      echo "Erro ao assumir role. Tentando usar credenciais padrão."
+    else
+      export AWS_ACCESS_KEY_ID=$(echo $TEMP_ROLE | cut -d' ' -f1)
+      export AWS_SECRET_ACCESS_KEY=$(echo $TEMP_ROLE | cut -d' ' -f2)
+      export AWS_SESSION_TOKEN=$(echo $TEMP_ROLE | cut -d' ' -f3)
+      
+      echo "Role assumida com sucesso!"
+      echo "AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:0:10}..."
+    fi
   else
-    echo "Aviso: Token do service account não encontrado. Tentando usar credenciais padrão."
+    echo "Aviso: Token do service account não encontrado em /var/run/secrets/eks.amazonaws.com/serviceaccount/token"
+    echo "Listando arquivos disponíveis:"
+    find /var/run/secrets -name "*token*" -type f 2>/dev/null || echo "Nenhum token encontrado"
+    echo "Tentando usar credenciais padrão."
   fi
 fi
 
