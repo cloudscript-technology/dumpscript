@@ -95,7 +95,6 @@ databases:
       region: "us-east-1"
       bucket: "my-db-backups"
       bucketPrefix: "postgresql/production"
-      roleArn: "arn:aws:iam::123456789012:role/DatabaseBackupRole"
     schedule: "0 2 * * *"  # Daily at 2 AM
     extraArgs: "--no-owner --no-acl"
     
@@ -111,7 +110,6 @@ databases:
       region: "us-east-1"
       bucket: "my-db-backups"
       bucketPrefix: "mysql/app"
-      roleArn: "arn:aws:iam::123456789012:role/DatabaseBackupRole"
     schedule: "0 3 * * *"  # Daily at 3 AM
     extraArgs: "--single-transaction --routines"
 ```

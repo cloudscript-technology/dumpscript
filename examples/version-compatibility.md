@@ -44,7 +44,6 @@ databases:
       region: "us-east-1"
       bucket: "your-backup-bucket"
       bucketPrefix: "postgresql-dumps"
-      roleArn: "arn:aws:iam::123456789012:role/BackupRole"
     schedule: "0 2 * * *"
     extraArgs: "--no-owner --no-acl"
 ```

@@ -1,5 +1,6 @@
 #!/bin/sh
 set -e
+set -o pipefail
 
 # Espera que todas as variáveis estejam setadas no ambiente
 # DB_TYPE (mysql ou postgresql), DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
@@ -61,14 +62,26 @@ fi
 DUMP_FILE="dump_$(date +%Y%m%d_%H%M%S).sql"
 DUMP_FILE_GZ="$DUMP_FILE.gz"
 
+echo "Iniciando dump do banco de dados..."
+
 case "$DB_TYPE" in
   "mysql")
     export MYSQL_PWD="$DB_PASSWORD"
-    mysqldump $DUMP_OPTIONS -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" "$DB_NAME" | gzip > "$DUMP_FILE_GZ"
+    echo "Executando mysqldump..."
+    if ! mysqldump $DUMP_OPTIONS -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" "$DB_NAME" | gzip > "$DUMP_FILE_GZ"; then
+      echo "Erro: Falha ao executar mysqldump"
+      rm -f "$DUMP_FILE_GZ"
+      exit 1
+    fi
     ;;
   "postgresql")
     export PGPASSWORD="$DB_PASSWORD"
-    pg_dump $DUMP_OPTIONS -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "$DB_USER" "$DB_NAME" | gzip > "$DUMP_FILE_GZ"
+    echo "Executando pg_dump..."
+    if ! pg_dump $DUMP_OPTIONS -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "$DB_USER" "$DB_NAME" | gzip > "$DUMP_FILE_GZ"; then
+      echo "Erro: Falha ao executar pg_dump"
+      rm -f "$DUMP_FILE_GZ"
+      exit 1
+    fi
     ;;
   *)
     echo "Erro: DB_TYPE deve ser 'mysql' ou 'postgresql', recebido: $DB_TYPE"
@@ -76,8 +89,37 @@ case "$DB_TYPE" in
     ;;
 esac
 
-aws s3 cp "$DUMP_FILE_GZ" "s3://$S3_BUCKET/$S3_PREFIX/$DUMP_FILE_GZ"
+# Verificar se o arquivo foi criado e não está vazio
+if [ ! -f "$DUMP_FILE_GZ" ]; then
+  echo "Erro: Arquivo de dump não foi criado"
+  exit 1
+fi
+
+# Verificar se o arquivo tem tamanho maior que 0
+if [ ! -s "$DUMP_FILE_GZ" ]; then
+  echo "Erro: Arquivo de dump está vazio"
+  rm -f "$DUMP_FILE_GZ"
+  exit 1
+fi
+
+# Verificar se o arquivo comprimido tem conteúdo válido
+if ! gzip -t "$DUMP_FILE_GZ"; then
+  echo "Erro: Arquivo de dump está corrompido"
+  rm -f "$DUMP_FILE_GZ"
+  exit 1
+fi
+
+DUMP_SIZE=$(stat -c%s "$DUMP_FILE_GZ")
+echo "Arquivo de dump criado com sucesso. Tamanho: $DUMP_SIZE bytes"
+
+# Fazer upload para S3
+echo "Fazendo upload para S3..."
+if ! aws s3 cp "$DUMP_FILE_GZ" "s3://$S3_BUCKET/$S3_PREFIX/$DUMP_FILE_GZ"; then
+  echo "Erro: Falha ao fazer upload para S3"
+  rm -f "$DUMP_FILE_GZ"
+  exit 1
+fi
 
 rm "$DUMP_FILE_GZ"
 
-echo "Dump concluído: s3://$S3_BUCKET/$S3_PREFIX/$DUMP_FILE_GZ" 
+echo "Dump concluído com sucesso: s3://$S3_BUCKET/$S3_PREFIX/$DUMP_FILE_GZ" 
