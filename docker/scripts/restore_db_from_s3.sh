@@ -12,11 +12,32 @@ fi
 
 export AWS_REGION
 
+# Assumir role da AWS se AWS_ROLE_ARN estiver definido
 if [ -n "$AWS_ROLE_ARN" ]; then
-  CREDS=$(aws sts assume-role --role-arn "$AWS_ROLE_ARN" --role-session-name "db-restore-session")
-  export AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r .Credentials.AccessKeyId)
-  export AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r .Credentials.SecretAccessKey)
-  export AWS_SESSION_TOKEN=$(echo $CREDS | jq -r .Credentials.SessionToken)
+  echo "Assumindo role da AWS: $AWS_ROLE_ARN"
+  
+  # Verificar se o token do service account está disponível
+  if [ -f "/var/run/secrets/eks.amazonaws.com/serviceaccount/token" ]; then
+    export AWS_WEB_IDENTITY_TOKEN_FILE="/var/run/secrets/eks.amazonaws.com/serviceaccount/token"
+    export AWS_ROLE_SESSION_NAME="dumpscript-restore-$(date +%s)"
+    
+    # Assumir a role usando o token do service account
+    echo "Assumindo role usando IRSA..."
+    TEMP_ROLE=$(aws sts assume-role-with-web-identity \
+      --role-arn "$AWS_ROLE_ARN" \
+      --role-session-name "$AWS_ROLE_SESSION_NAME" \
+      --web-identity-token-file "$AWS_WEB_IDENTITY_TOKEN_FILE" \
+      --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' \
+      --output text)
+    
+    export AWS_ACCESS_KEY_ID=$(echo $TEMP_ROLE | cut -d' ' -f1)
+    export AWS_SECRET_ACCESS_KEY=$(echo $TEMP_ROLE | cut -d' ' -f2)
+    export AWS_SESSION_TOKEN=$(echo $TEMP_ROLE | cut -d' ' -f3)
+    
+    echo "Role assumida com sucesso!"
+  else
+    echo "Aviso: Token do service account não encontrado. Tentando usar credenciais padrão."
+  fi
 fi
 
 aws s3 cp "s3://$S3_BUCKET/$S3_KEY" dump_restore.sql.gz

@@ -11,6 +11,34 @@ if [ -z "$DB_TYPE" ]; then
   exit 1
 fi
 
+# Assumir role da AWS se AWS_ROLE_ARN estiver definido
+if [ -n "$AWS_ROLE_ARN" ]; then
+  echo "Assumindo role da AWS: $AWS_ROLE_ARN"
+  
+  # Verificar se o token do service account está disponível
+  if [ -f "/var/run/secrets/eks.amazonaws.com/serviceaccount/token" ]; then
+    export AWS_WEB_IDENTITY_TOKEN_FILE="/var/run/secrets/eks.amazonaws.com/serviceaccount/token"
+    export AWS_ROLE_SESSION_NAME="dumpscript-$(date +%s)"
+    
+    # Assumir a role usando o token do service account
+    echo "Assumindo role usando IRSA..."
+    TEMP_ROLE=$(aws sts assume-role-with-web-identity \
+      --role-arn "$AWS_ROLE_ARN" \
+      --role-session-name "$AWS_ROLE_SESSION_NAME" \
+      --web-identity-token-file "$AWS_WEB_IDENTITY_TOKEN_FILE" \
+      --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' \
+      --output text)
+    
+    export AWS_ACCESS_KEY_ID=$(echo $TEMP_ROLE | cut -d' ' -f1)
+    export AWS_SECRET_ACCESS_KEY=$(echo $TEMP_ROLE | cut -d' ' -f2)
+    export AWS_SESSION_TOKEN=$(echo $TEMP_ROLE | cut -d' ' -f3)
+    
+    echo "Role assumida com sucesso!"
+  else
+    echo "Aviso: Token do service account não encontrado. Tentando usar credenciais padrão."
+  fi
+fi
+
 DUMP_FILE="dump_$(date +%Y%m%d_%H%M%S).sql"
 DUMP_FILE_GZ="$DUMP_FILE.gz"
 
