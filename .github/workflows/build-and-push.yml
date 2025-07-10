@@ -64,10 +64,11 @@ jobs:
         # Get commit messages since last tag
         git log ${LATEST_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges >> changelog.md
         
-        # Set output for release body
-        echo "changelog<<EOF" >> $GITHUB_OUTPUT
+        # Use a unique delimiter to avoid conflicts
+        DELIMITER=$(openssl rand -hex 8)
+        echo "changelog<<${DELIMITER}" >> $GITHUB_OUTPUT
         cat changelog.md >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
+        echo "${DELIMITER}" >> $GITHUB_OUTPUT
 
     - name: Create Release
       uses: actions/create-release@v1
