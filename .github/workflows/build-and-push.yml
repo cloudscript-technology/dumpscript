@@ -6,7 +6,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}/dump
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   create-release:
