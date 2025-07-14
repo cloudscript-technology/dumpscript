@@ -59,6 +59,12 @@ if [ -n "$AWS_ROLE_ARN" ]; then
   fi
 fi
 
+# Criar estrutura de data para o path S3
+CURRENT_DATE=$(date +%Y-%m-%d)
+YEAR=$(date +%Y)
+MONTH=$(date +%m)
+DAY=$(date +%d)
+
 DUMP_FILE="dump_$(date +%Y%m%d_%H%M%S).sql"
 DUMP_FILE_GZ="$DUMP_FILE.gz"
 
@@ -112,9 +118,13 @@ fi
 DUMP_SIZE=$(stat -c%s "$DUMP_FILE_GZ")
 echo "Arquivo de dump criado com sucesso. Tamanho: $DUMP_SIZE bytes"
 
+# Construir o path S3 com estrutura de data: bucket/prefix/ano/mes/dia/arquivo
+S3_PATH="s3://$S3_BUCKET/$S3_PREFIX/$YEAR/$MONTH/$DAY/$DUMP_FILE_GZ"
+
 # Fazer upload para S3
 echo "Fazendo upload para S3..."
-if ! aws s3 cp "$DUMP_FILE_GZ" "s3://$S3_BUCKET/$S3_PREFIX/$DUMP_FILE_GZ"; then
+echo "Path de destino: $S3_PATH"
+if ! aws s3 cp "$DUMP_FILE_GZ" "$S3_PATH"; then
   echo "Erro: Falha ao fazer upload para S3"
   rm -f "$DUMP_FILE_GZ"
   exit 1
@@ -122,4 +132,4 @@ fi
 
 rm "$DUMP_FILE_GZ"
 
-echo "Dump concluído com sucesso: s3://$S3_BUCKET/$S3_PREFIX/$DUMP_FILE_GZ" 
+echo "Dump concluído com sucesso: $S3_PATH" 
