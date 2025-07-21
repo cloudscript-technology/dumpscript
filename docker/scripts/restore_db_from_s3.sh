@@ -59,6 +59,14 @@ if [ -n "$AWS_ROLE_ARN" ]; then
   fi
 fi
 
+echo "[DEBUG] DB_TYPE: $DB_TYPE"
+echo "[DEBUG] DB_HOST: $DB_HOST"
+echo "[DEBUG] DB_USER: $DB_USER"
+echo "[DEBUG] DB_NAME: $DB_NAME"
+echo "[DEBUG] S3_BUCKET: $S3_BUCKET"
+echo "[DEBUG] S3_PREFIX: $S3_PREFIX"
+echo "[DEBUG] S3_KEY: $S3_KEY"
+
 aws s3 cp "s3://$S3_BUCKET/$S3_KEY" dump_restore.sql.gz
 gunzip -f dump_restore.sql.gz
 

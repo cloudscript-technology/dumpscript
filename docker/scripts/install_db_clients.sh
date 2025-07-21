@@ -7,6 +7,15 @@ set -e
 # - MYSQL_VERSION: MySQL/MariaDB client version (10.11, 11.4)
 
 echo "Installing database clients based on environment variables..."
+echo "[DEBUG] DB_TYPE: $DB_TYPE"
+case "$DB_TYPE" in
+    "postgresql")
+        echo "POSTGRES_VERSION: ${POSTGRES_VERSION:-16}"
+        ;;
+    "mysql")
+        echo "MYSQL_VERSION: ${MYSQL_VERSION:-10.11}"
+        ;;
+esac
 
 # Function to install PostgreSQL client
 install_postgresql_client() {

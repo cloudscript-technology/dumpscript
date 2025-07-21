@@ -6,6 +6,7 @@ RUN apk add --no-cache \
     jq \
     gzip \
     bash \
+    tzdata \
     curl
 
 ENV PATH="/usr/bin:${PATH}"

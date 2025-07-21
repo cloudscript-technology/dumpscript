@@ -17,7 +17,14 @@ fi
 BACKUP_PATH="${S3_PREFIX}/${PERIODICITY}/"
 
 # Cutoff date for retention
-CUTOFF_DATE=$(date -u -r $(( $(date +%s) - (${RETENTION_DAYS}*24*60*60) )) +%Y-%m-%d)
+CUTOFF_DATE=$(date -u +"%Y-%m-%d" -d "@$(( $(date +%s) - (${RETENTION_DAYS}*24*60*60) ))")
+
+# Debug logs
+echo "[DEBUG] S3_PREFIX: $S3_PREFIX"
+echo "[DEBUG] PERIODICITY: $PERIODICITY"
+echo "[DEBUG] RETENTION_DAYS: $RETENTION_DAYS"
+echo "[DEBUG] BACKUP_PATH: $BACKUP_PATH"
+echo "[DEBUG] CUTOFF_DATE: $CUTOFF_DATE"
 
 # List, filter, and remove old backups
 aws s3 ls "s3://${BACKUP_PATH}" --recursive | while read -r line; do
@@ -26,9 +33,13 @@ aws s3 ls "s3://${BACKUP_PATH}" --recursive | while read -r line; do
     file_path=$(echo "$line" | awk '{print $4}')
     # If no file, skip
     [ -z "$file_path" ] && continue
+    echo "[DEBUG] Checking file: $file_path (date: $file_date)"
     # Compare dates
     if [[ "$file_date" < "$CUTOFF_DATE" ]]; then
+        echo "[DEBUG] $file_date < $CUTOFF_DATE: will remove"
         echo "Removing s3://${BACKUP_PATH}${file_path} (date: $file_date)"
         aws s3 rm "s3://${BACKUP_PATH}${file_path}"
+    else
+        echo "[DEBUG] $file_date >= $CUTOFF_DATE: keeping"
     fi
 done 

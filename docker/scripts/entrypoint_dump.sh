@@ -6,14 +6,12 @@ set -e
 
 echo "=== DumpScript Container Starting ==="
 echo "DB_TYPE: $DB_TYPE"
-case "$DB_TYPE" in
-    "postgresql")
-        echo "POSTGRES_VERSION: ${POSTGRES_VERSION:-16}"
-        ;;
-    "mysql")
-        echo "MYSQL_VERSION: ${MYSQL_VERSION:-10.11}"
-        ;;
-esac
+echo "[DEBUG] DB_TYPE: $DB_TYPE"
+if [ "$DB_TYPE" = "postgresql" ]; then
+  echo "[DEBUG] POSTGRES_VERSION: ${POSTGRES_VERSION:-16}"
+elif [ "$DB_TYPE" = "mysql" ]; then
+  echo "[DEBUG] MYSQL_VERSION: ${MYSQL_VERSION:-10.11}"
+fi
 
 # Validate required variables
 if [ -z "$DB_TYPE" ]; then

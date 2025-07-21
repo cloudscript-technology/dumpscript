@@ -74,6 +74,13 @@ DUMP_FILE="dump_$(date +%Y%m%d_%H%M%S).sql"
 DUMP_FILE_GZ="$DUMP_FILE.gz"
 
 echo "Starting database dump..."
+echo "[DEBUG] DB_TYPE: $DB_TYPE"
+echo "[DEBUG] DB_HOST: $DB_HOST"
+echo "[DEBUG] DB_USER: $DB_USER"
+echo "[DEBUG] DB_NAME: $DB_NAME"
+echo "[DEBUG] S3_BUCKET: $S3_BUCKET"
+echo "[DEBUG] S3_PREFIX: $S3_PREFIX"
+echo "[DEBUG] PERIODICITY: $PERIODICITY"
 
 case "$DB_TYPE" in
   "mysql")
@@ -125,6 +132,7 @@ echo "Dump file created successfully. Size: $DUMP_SIZE bytes"
 
 # Construct the S3 path with data structure: bucket/prefix/periodicity/year/month/day/file
 S3_PATH="s3://$S3_BUCKET/$S3_PREFIX/$PERIODICITY/$YEAR/$MONTH/$DAY/$DUMP_FILE_GZ"
+echo "[DEBUG] S3_PATH: $S3_PATH"
 
 # Upload to S3
 echo "Uploading to S3..."
