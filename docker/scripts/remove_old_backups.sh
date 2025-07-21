@@ -31,8 +31,18 @@ echo "[DEBUG] CUTOFF_DATE: $CUTOFF_DATE"
 aws s3 ls "s3://${S3_BUCKET}/${BACKUP_PATH}" --recursive | while read -r line; do
     file_path=$(echo "$line" | awk '{print $4}')
     [ -z "$file_path" ] && continue
-    # Extract backup date from path: .../YYYY/MM/DD/filename
-    backup_date=$(echo "$file_path" | awk -F'/' '{print $(NF-4) "-" $(NF-3) "-" $(NF-2)}')
+    # Only process files ending with .sql or .sql.gz
+    if [[ ! "$file_path" =~ \.sql(\.gz)?$ ]]; then
+        echo "[DEBUG] Skipping non-backup entry: $file_path"
+        continue
+    fi
+    # Extract backup date from path using regex
+    if [[ "$file_path" =~ ([0-9]{4})/([0-9]{2})/([0-9]{2})/ ]]; then
+        backup_date="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]}"
+    else
+        echo "[DEBUG] Could not extract backup date from path: $file_path"
+        continue
+    fi
     echo "[DEBUG] Checking file: $file_path (backup date: $backup_date) - $CUTOFF_DATE"
     # Compare dates
     if [[ "$backup_date" < "$CUTOFF_DATE" ]]; then
