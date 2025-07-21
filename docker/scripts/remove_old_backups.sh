@@ -29,18 +29,17 @@ echo "[DEBUG] CUTOFF_DATE: $CUTOFF_DATE"
 
 # List, filter, and remove old backups
 aws s3 ls "s3://${S3_BUCKET}/${BACKUP_PATH}" --recursive | while read -r line; do
-    # Example line: 2024-06-01 12:00:00   12345 backups/diario/2024/06/01/backup.sql.gz
-    file_date=$(echo "$line" | awk '{print $1}')
     file_path=$(echo "$line" | awk '{print $4}')
-    # If no file, skip
     [ -z "$file_path" ] && continue
-    echo "[DEBUG] Checking file: $file_path (date: $file_date)"
+    # Extract backup date from path: .../YYYY/MM/DD/filename
+    backup_date=$(echo "$file_path" | awk -F'/' '{print $(NF-4) "-" $(NF-3) "-" $(NF-2)}')
+    echo "[DEBUG] Checking file: $file_path (backup date: $backup_date) - $CUTOFF_DATE"
     # Compare dates
-    if [[ "$file_date" < "$CUTOFF_DATE" ]]; then
-        echo "[DEBUG] $file_date < $CUTOFF_DATE: will remove"
-        echo "Removing s3://${S3_BUCKET}/${BACKUP_PATH}${file_path} (date: $file_date)"
+    if [[ "$backup_date" < "$CUTOFF_DATE" ]]; then
+        echo "[DEBUG] $backup_date < $CUTOFF_DATE: will remove"
+        echo "Removing s3://${S3_BUCKET}/${BACKUP_PATH}${file_path} (backup date: $backup_date)"
         aws s3 rm "s3://${S3_BUCKET}/${BACKUP_PATH}${file_path}"
     else
-        echo "[DEBUG] $file_date >= $CUTOFF_DATE: keeping"
+        echo "[DEBUG] $backup_date >= $CUTOFF_DATE: keeping"
     fi
 done 
