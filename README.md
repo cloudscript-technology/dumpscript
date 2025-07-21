@@ -41,6 +41,8 @@ Supported versions:
 - `AWS_REGION` - AWS region for S3
 - `S3_BUCKET` - S3 bucket name
 - `S3_PREFIX` - S3 prefix for dumps
+- `PERIODICITY` - Backup periodicity (`daily`, `weekly`, `monthly`, `yearly`)
+- `RETENTION_DAYS` - Retention days
 
 #### Optional
 - `POSTGRES_VERSION` - PostgreSQL client version (default: `16`)
@@ -52,8 +54,8 @@ Supported versions:
 ### Docker Example
 
 ```bash
-# PostgreSQL 16 dump
-docker run --rm \
+# PostgreSQL 16 daily dump
+ docker run --rm \
   -e DB_TYPE=postgresql \
   -e POSTGRES_VERSION=16 \
   -e DB_HOST=localhost \
@@ -63,10 +65,12 @@ docker run --rm \
   -e AWS_REGION=us-east-1 \
   -e S3_BUCKET=my-backups \
   -e S3_PREFIX=postgresql-dumps \
+  -e PERIODICITY=daily \
+  -e RETENTION_DAYS=7 \
   ghcr.io/cloudscript-technology/dumpscript:latest
 
-# MySQL 8.0 dump
-docker run --rm \
+# MySQL 8.0 weekly dump
+ docker run --rm \
   -e DB_TYPE=mysql \
   -e MYSQL_VERSION=8.0 \
   -e DB_HOST=localhost \
@@ -76,6 +80,8 @@ docker run --rm \
   -e AWS_REGION=us-east-1 \
   -e S3_BUCKET=my-backups \
   -e S3_PREFIX=mysql-dumps \
+  -e PERIODICITY=weekly \
+  -e RETENTION_DAYS=7 \
   ghcr.io/cloudscript-technology/dumpscript:latest
 ```
 
@@ -120,6 +126,7 @@ databases:
 2. **Dynamic Client Installation**: The appropriate database client is installed using Alpine's package manager
 3. **Version Verification**: The installation is verified and client version is logged
 4. **Database Operations**: The original dump/restore scripts are executed with the correct client version
+5. **S3 Path Structure**: The dump is uploaded to S3 at the path: `s3://$S3_BUCKET/$S3_PREFIX/$PERIODICITY/$YEAR/$MONTH/$DAY/$DUMP_FILE_GZ` (e.g., `daily`, `weekly`, `monthly`, `yearly`)
 
 ## Building
 

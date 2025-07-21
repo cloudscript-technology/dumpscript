@@ -1,25 +1,29 @@
 #!/bin/bash
 set -e
 
-# Entrypoint para o container de dump
-# Instala os clientes necessários dinamicamente e executa o dump
+# Entrypoint for the dump container
+# Installs necessary clients dynamically and executes the dump
 
 echo "=== DumpScript Container Starting ==="
 echo "DB_TYPE: $DB_TYPE"
 echo "POSTGRES_VERSION: ${POSTGRES_VERSION:-16}"
 echo "MYSQL_VERSION: ${MYSQL_VERSION:-10.11}"
 
-# Validar variáveis obrigatórias
+# Validate required variables
 if [ -z "$DB_TYPE" ]; then
     echo "Error: DB_TYPE must be specified (postgresql or mysql)"
     exit 1
 fi
 
-# Instalar clientes de banco de dados
+# Remove old backups that are outside the retention period
+echo "Removing old backups..."
+/usr/local/bin/remove_old_backups.sh
+
+# Install database clients
 echo "Installing database clients..."
 /usr/local/bin/install_db_clients.sh
 
-# Verificar se os clientes foram instalados corretamente
+# Check if clients were installed correctly
 case "$DB_TYPE" in
     "postgresql")
         if ! command -v pg_dump &> /dev/null; then
@@ -40,5 +44,5 @@ esac
 echo "Database clients installed successfully!"
 echo "=== Starting Database Dump ==="
 
-# Executar o script de dump
+# Execute the dump script
 exec /usr/local/bin/dump_db_to_s3.sh 

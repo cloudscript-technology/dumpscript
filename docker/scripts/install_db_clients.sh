@@ -1,14 +1,14 @@
 #!/bin/bash
 set -e
 
-# Script para instalar clientes de banco de dados dinamicamente
-# Baseado nas variáveis de ambiente:
-# - POSTGRES_VERSION: versão do cliente PostgreSQL (13, 14, 15, 16, 17)
-# - MYSQL_VERSION: versão do cliente MySQL/MariaDB (10.11, 11.4)
+# Script to install database clients dynamically
+# Based on environment variables:
+# - POSTGRES_VERSION: PostgreSQL client version (13, 14, 15, 16, 17)
+# - MYSQL_VERSION: MySQL/MariaDB client version (10.11, 11.4)
 
 echo "Installing database clients based on environment variables..."
 
-# Função para instalar cliente PostgreSQL
+# Function to install PostgreSQL client
 install_postgresql_client() {
     local version=$1
     echo "Installing PostgreSQL client version $version..."
@@ -26,7 +26,7 @@ install_postgresql_client() {
     esac
 }
 
-# Função para instalar cliente MySQL/MariaDB
+# Function to install MySQL/MariaDB client
 install_mysql_client() {
     local version=$1
     echo "Installing MySQL/MariaDB client version $version..."
@@ -48,7 +48,7 @@ install_mysql_client() {
     esac
 }
 
-# Instalar clientes baseado no tipo de banco
+# Install clients based on database type
 case "$DB_TYPE" in
     "postgresql")
         POSTGRES_VERSION=${POSTGRES_VERSION:-16}

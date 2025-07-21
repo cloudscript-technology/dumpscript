@@ -1,39 +1,39 @@
-# Resolvendo Incompatibilidade de Versões
+# Solving Version Incompatibility
 
-Este exemplo mostra como resolver o erro de incompatibilidade de versão do PostgreSQL que você enfrentou:
+This example shows how to solve the PostgreSQL version incompatibility error you encountered:
 
 ```
 pg_dump: error: aborting because of server version mismatch
 pg_dump: detail: server version: 16.2; pg_dump version: 15.13
 ```
 
-## Problema
+## Problem
 
-O erro acontece quando a versão do cliente `pg_dump` é diferente da versão do servidor PostgreSQL. Neste caso:
-- Servidor PostgreSQL: **16.2**
-- Cliente pg_dump: **15.13**
+This error occurs when the `pg_dump` client version is different from the PostgreSQL server version. In this case:
+- PostgreSQL server: **16.2**
+- pg_dump client: **15.13**
 
-## Solução
+## Solution
 
-### 1. Identificar a Versão do Servidor
+### 1. Identify the Server Version
 
-Primeiro, identifique a versão do seu servidor PostgreSQL:
+First, identify your PostgreSQL server version:
 
 ```sql
 SELECT version();
--- ou
+-- or
 SHOW server_version;
 ```
 
-### 2. Configurar o Helm Chart
+### 2. Configure the Helm Chart
 
-Configure o Helm chart para usar a versão correta do cliente:
+Configure the Helm chart to use the correct client version:
 
 ```yaml
 # values.yaml
 databases:
   - type: postgresql
-    version: "16"  # Usar versão 16 para corresponder ao servidor 16.2
+    version: "16"  # Use version 16 to match server 16.2
     connectionInfo:
       host: "your-postgres-server.com"
       username: "backup_user"
@@ -48,17 +48,17 @@ databases:
     extraArgs: "--no-owner --no-acl"
 ```
 
-### 3. Executar o Backup
+### 3. Run the Backup
 
 ```bash
 helm upgrade --install dumpscript-backup ./helm-charts/dumpscript -f values.yaml
 ```
 
-### 4. Verificar a Execução
+### 4. Check the Execution
 
-O container agora irá:
+The container will now:
 
-1. **Instalar o cliente correto em runtime**:
+1. **Install the correct client at runtime**:
    ```
    === DumpScript Container Starting ===
    DB_TYPE: postgresql
@@ -69,37 +69,37 @@ O container agora irá:
    PostgreSQL client version: pg_dump (PostgreSQL) 16.x
    ```
 
-2. **Executar o dump sem erros**:
+2. **Run the dump without errors**:
    ```
    === Starting Database Dump ===
-   Dump concluído: s3://your-bucket/postgresql-dumps/dump_20240115_020000.sql.gz
+   Dump completed: s3://your-bucket/postgresql-dumps/daily/2024/01/15/dump_20240115_020000.sql.gz
    ```
 
-## Versões Suportadas
+## Supported Versions
 
 ### PostgreSQL
-- `13` - Para servidores PostgreSQL 13.x
-- `14` - Para servidores PostgreSQL 14.x  
-- `15` - Para servidores PostgreSQL 15.x
-- `16` - Para servidores PostgreSQL 16.x
-- `17` - Para servidores PostgreSQL 17.x
+- `13` - For PostgreSQL 13.x servers
+- `14` - For PostgreSQL 14.x servers
+- `15` - For PostgreSQL 15.x servers
+- `16` - For PostgreSQL 16.x servers
+- `17` - For PostgreSQL 17.x servers
 
 ### MySQL/MariaDB
-- `8.0` - Para servidores MySQL 8.0
-- `10.11` - Para servidores MariaDB 10.11
-- `11.4` - Para servidores MariaDB 11.4
+- `8.0` - For MySQL 8.0 servers
+- `10.11` - For MariaDB 10.11 servers
+- `11.4` - For MariaDB 11.4 servers
 
-## Dicas Importantes
+## Important Tips
 
-1. **Sempre use a versão major correspondente**: Se o servidor é 16.2, use `version: "16"`
-2. **Teste antes de ir para produção**: Execute um dump manual primeiro
-3. **Monitore os logs**: Verifique se a instalação foi bem-sucedida nos logs do container
-4. **Use variáveis de ambiente**: Para testes rápidos, você pode usar variáveis de ambiente diretamente
+1. **Always use the matching major version**: If your server is 16.2, use `version: "16"`
+2. **Test before production**: Run a manual dump first
+3. **Monitor the logs**: Check if the installation succeeded in the container logs
+4. **Use environment variables**: For quick tests, you can use environment variables directly
 
-## Exemplo de Teste Manual
+## Example: Manual Test
 
 ```bash
-# Testar com PostgreSQL 16
+# Test with PostgreSQL 16
 docker run --rm \
   -e DB_TYPE=postgresql \
   -e POSTGRES_VERSION=16 \
@@ -110,12 +110,14 @@ docker run --rm \
   -e AWS_REGION=us-east-1 \
   -e S3_BUCKET=your-bucket \
   -e S3_PREFIX=test-dumps \
+  -e PERIODICITY=daily \
+  -e RETENTION_DAYS=7 \
   ghcr.io/cloudscript-technology/dumpscript:latest
 ```
 
-## Logs de Sucesso
+## Success Logs
 
-Quando tudo funciona corretamente, você verá logs similares a:
+When everything works correctly, you will see logs similar to:
 
 ```
 === DumpScript Container Starting ===
@@ -126,5 +128,5 @@ Installing PostgreSQL client version 16...
 PostgreSQL client 16 installed successfully
 Database clients installed successfully!
 === Starting Database Dump ===
-Dump concluído: s3://your-bucket/test-dumps/dump_20240115_142234.sql.gz
+Dump completed: s3://your-bucket/test-dumps/daily/2024/01/15/dump_20240115_142234.sql.gz
 ``` 

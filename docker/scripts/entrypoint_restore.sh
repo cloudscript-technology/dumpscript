@@ -1,25 +1,25 @@
 #!/bin/bash
 set -e
 
-# Entrypoint para o container de restore
-# Instala os clientes necessários dinamicamente e executa o restore
+# Entrypoint for the restore container
+# Installs necessary clients dynamically and executes the restore
 
 echo "=== DumpScript Restore Container Starting ==="
 echo "DB_TYPE: $DB_TYPE"
 echo "POSTGRES_VERSION: ${POSTGRES_VERSION:-16}"
 echo "MYSQL_VERSION: ${MYSQL_VERSION:-10.11}"
 
-# Validar variáveis obrigatórias
+# Validate required variables
 if [ -z "$DB_TYPE" ]; then
     echo "Error: DB_TYPE must be specified (postgresql or mysql)"
     exit 1
 fi
 
-# Instalar clientes de banco de dados
+# Install database clients
 echo "Installing database clients..."
 /usr/local/bin/install_db_clients.sh
 
-# Verificar se os clientes foram instalados corretamente
+# Verify if clients were installed correctly
 case "$DB_TYPE" in
     "postgresql")
         if ! command -v psql &> /dev/null; then
@@ -40,5 +40,5 @@ esac
 echo "Database clients installed successfully!"
 echo "=== Starting Database Restore ==="
 
-# Executar o script de restore
+# Execute the restore script
 exec /usr/local/bin/restore_db_from_s3.sh 

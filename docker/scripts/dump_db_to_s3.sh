@@ -2,35 +2,40 @@
 set -e
 set -o pipefail
 
-# Espera que todas as variáveis estejam setadas no ambiente
-# DB_TYPE (mysql ou postgresql), DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
-# AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, AWS_ROLE_ARN, AWS_REGION, S3_BUCKET, S3_PREFIX
-# DUMP_OPTIONS (opções específicas para mysqldump ou pg_dump)
+# Wait for all variables to be set in the environment
+# DB_TYPE (mysql or postgresql), DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
+# AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, AWS_ROLE_ARN, AWS_REGION, S3_BUCKET, S3_PREFIX, PERIODICITY
+# DUMP_OPTIONS (specific options for mysqldump or pg_dump)
 
 if [ -z "$DB_TYPE" ]; then
-  echo "Erro: DB_TYPE deve ser especificado (mysql ou postgresql)"
+  echo "Error: DB_TYPE must be specified (mysql or postgresql)"
   exit 1
 fi
 
-# Assumir role da AWS se AWS_ROLE_ARN estiver definido
+if [ -z "$PERIODICITY" ]; then
+  echo "Error: PERIODICITY must be specified (e.g., daily, weekly, monthly, yearly)"
+  exit 1
+fi
+
+# Assume AWS role if AWS_ROLE_ARN is defined
 if [ -n "$AWS_ROLE_ARN" ]; then
-  echo "Assumindo role da AWS: $AWS_ROLE_ARN"
+  echo "Assuming AWS role: $AWS_ROLE_ARN"
   
-  # Verificar se o token do service account está disponível
+  # Check if the service account token is available
   if [ -f "/var/run/secrets/eks.amazonaws.com/serviceaccount/token" ]; then
-    echo "Token do service account encontrado"
+    echo "Service account token found"
     
-    # Ler o token do arquivo
+    # Read the token from the file
     WEB_IDENTITY_TOKEN=$(cat /var/run/secrets/eks.amazonaws.com/serviceaccount/token)
     if [ -z "$WEB_IDENTITY_TOKEN" ]; then
-      echo "Erro: Token do service account está vazio"
+      echo "Error: Service account token is empty"
       exit 1
     fi
     
     export AWS_ROLE_SESSION_NAME="dumpscript-$(date +%s)"
     
-    # Assumir a role usando o token do service account
-    echo "Assumindo role usando IRSA..."
+    # Assume the role using the service account token
+    echo "Assuming role using IRSA..."
     echo "Role ARN: $AWS_ROLE_ARN"
     echo "Role Session Name: $AWS_ROLE_SESSION_NAME"
     
@@ -42,24 +47,24 @@ if [ -n "$AWS_ROLE_ARN" ]; then
       --output text)
     
     if [ $? -ne 0 ]; then
-      echo "Erro ao assumir role. Tentando usar credenciais padrão."
+      echo "Error assuming role. Attempting to use default credentials."
     else
       export AWS_ACCESS_KEY_ID=$(echo $TEMP_ROLE | cut -d' ' -f1)
       export AWS_SECRET_ACCESS_KEY=$(echo $TEMP_ROLE | cut -d' ' -f2)
       export AWS_SESSION_TOKEN=$(echo $TEMP_ROLE | cut -d' ' -f3)
       
-      echo "Role assumida com sucesso!"
+      echo "Role assumed successfully!"
       echo "AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:0:10}..."
     fi
   else
-    echo "Aviso: Token do service account não encontrado em /var/run/secrets/eks.amazonaws.com/serviceaccount/token"
-    echo "Listando arquivos disponíveis:"
-    find /var/run/secrets -name "*token*" -type f 2>/dev/null || echo "Nenhum token encontrado"
-    echo "Tentando usar credenciais padrão."
+    echo "Warning: Service account token not found at /var/run/secrets/eks.amazonaws.com/serviceaccount/token"
+    echo "Listing available files:"
+    find /var/run/secrets -name "*token*" -type f 2>/dev/null || echo "No token found"
+    echo "Attempting to use default credentials."
   fi
 fi
 
-# Criar estrutura de data para o path S3
+# Create data structure for S3 path
 CURRENT_DATE=$(date +%Y-%m-%d)
 YEAR=$(date +%Y)
 MONTH=$(date +%m)
@@ -68,68 +73,68 @@ DAY=$(date +%d)
 DUMP_FILE="dump_$(date +%Y%m%d_%H%M%S).sql"
 DUMP_FILE_GZ="$DUMP_FILE.gz"
 
-echo "Iniciando dump do banco de dados..."
+echo "Starting database dump..."
 
 case "$DB_TYPE" in
   "mysql")
     export MYSQL_PWD="$DB_PASSWORD"
-    echo "Executando mysqldump..."
+    echo "Executing mysqldump..."
     if ! mysqldump $DUMP_OPTIONS -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" "$DB_NAME" | gzip > "$DUMP_FILE_GZ"; then
-      echo "Erro: Falha ao executar mysqldump"
+      echo "Error: mysqldump execution failed"
       rm -f "$DUMP_FILE_GZ"
       exit 1
     fi
     ;;
   "postgresql")
     export PGPASSWORD="$DB_PASSWORD"
-    echo "Executando pg_dump..."
+    echo "Executing pg_dump..."
     if ! pg_dump $DUMP_OPTIONS -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "$DB_USER" "$DB_NAME" | gzip > "$DUMP_FILE_GZ"; then
-      echo "Erro: Falha ao executar pg_dump"
+      echo "Error: pg_dump execution failed"
       rm -f "$DUMP_FILE_GZ"
       exit 1
     fi
     ;;
   *)
-    echo "Erro: DB_TYPE deve ser 'mysql' ou 'postgresql', recebido: $DB_TYPE"
+    echo "Error: DB_TYPE must be 'mysql' or 'postgresql', received: $DB_TYPE"
     exit 1
     ;;
 esac
 
-# Verificar se o arquivo foi criado e não está vazio
+# Check if the file was created and is not empty
 if [ ! -f "$DUMP_FILE_GZ" ]; then
-  echo "Erro: Arquivo de dump não foi criado"
+  echo "Error: Dump file was not created"
   exit 1
 fi
 
-# Verificar se o arquivo tem tamanho maior que 0
+# Check if the file has content
 if [ ! -s "$DUMP_FILE_GZ" ]; then
-  echo "Erro: Arquivo de dump está vazio"
+  echo "Error: Dump file is empty"
   rm -f "$DUMP_FILE_GZ"
   exit 1
 fi
 
-# Verificar se o arquivo comprimido tem conteúdo válido
+# Check if the compressed file is valid
 if ! gzip -t "$DUMP_FILE_GZ"; then
-  echo "Erro: Arquivo de dump está corrompido"
+  echo "Error: Dump file is corrupted"
   rm -f "$DUMP_FILE_GZ"
   exit 1
 fi
 
 DUMP_SIZE=$(stat -c%s "$DUMP_FILE_GZ")
-echo "Arquivo de dump criado com sucesso. Tamanho: $DUMP_SIZE bytes"
+echo "Dump file created successfully. Size: $DUMP_SIZE bytes"
 
-# Construir o path S3 com estrutura de data: bucket/prefix/ano/mes/dia/arquivo
-S3_PATH="s3://$S3_BUCKET/$S3_PREFIX/$YEAR/$MONTH/$DAY/$DUMP_FILE_GZ"
+# Construct the S3 path with data structure: bucket/prefix/periodicity/year/month/day/file
+S3_PATH="s3://$S3_BUCKET/$S3_PREFIX/$PERIODICITY/$YEAR/$MONTH/$DAY/$DUMP_FILE_GZ"
 
-# Fazer upload para S3
-echo "Fazendo upload para S3..."
-echo "Path de destino: $S3_PATH"
+# Upload to S3
+echo "Uploading to S3..."
+echo "Destination path: $S3_PATH"
 if ! aws s3 cp "$DUMP_FILE_GZ" "$S3_PATH"; then
-  echo "Erro: Falha ao fazer upload para S3"
+  echo "Error: Failed to upload to S3"
   rm -f "$DUMP_FILE_GZ"
   exit 1
 fi
 
 rm "$DUMP_FILE_GZ"
 
-echo "Dump concluído com sucesso: $S3_PATH" 
+echo "Dump completed successfully: $S3_PATH" 
