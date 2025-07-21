@@ -48,7 +48,7 @@ aws s3 ls "s3://${S3_BUCKET}/${BACKUP_PATH}" --recursive | while read -r line; d
     if [[ "$backup_date" < "$CUTOFF_DATE" ]]; then
         echo "[DEBUG] $backup_date < $CUTOFF_DATE: will remove"
         echo "Removing s3://${S3_BUCKET}/${BACKUP_PATH}${file_path} (backup date: $backup_date)"
-        aws s3 rm "s3://${S3_BUCKET}/${BACKUP_PATH}${file_path}"
+        aws s3 rm "s3://${S3_BUCKET}/${file_path}"
     else
         echo "[DEBUG] $backup_date >= $CUTOFF_DATE: keeping"
     fi
