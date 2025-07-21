@@ -17,7 +17,7 @@ fi
 BACKUP_PATH="${S3_PREFIX}/${PERIODICITY}/"
 
 # Cutoff date for retention
-CUTOFF_DATE=$(date -u -d "-${RETENTION_DAYS} days" +%Y-%m-%d)
+CUTOFF_DATE=$(date -u -r $(( $(date +%s) - (${RETENTION_DAYS}*24*60*60) )) +%Y-%m-%d)
 
 # List, filter, and remove old backups
 aws s3 ls "s3://${BACKUP_PATH}" --recursive | while read -r line; do
