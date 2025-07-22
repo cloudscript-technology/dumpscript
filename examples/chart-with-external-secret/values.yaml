@@ -1,0 +1,31 @@
+dumpscript:
+  nameOverride: "dumpscript"
+  fullnameOverride: "dumpscript"
+
+  image:
+    repository: ghcr.io/cloudscript-technology/dumpscript
+    pullPolicy: IfNotPresent
+    # Default is the chart appVersion
+    tag: ""
+
+  databases:
+  - type: postgresql
+    version: "16"
+    periodicity: daily
+    retentionDays: 7
+    connectionInfo:
+      secretName: database-secret
+    aws:
+      region: "us-east-1"
+      bucket: "my-bucket-name"
+      bucketPrefix: "my-database-name"
+    schedule: "0 2 * * *"
+    extraArgs: "--format plain --encoding UTF8"
+
+  serviceAccount:
+    create: true
+    automount: true
+    annotations:
+      eks.amazonaws.com/role-arn: "arn:aws:iam::<aws-account-id>:role/<role-name>"
+    name: "dumpscript"
+    namespace: "dumpscript"
