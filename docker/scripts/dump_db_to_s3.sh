@@ -6,14 +6,40 @@ set -o pipefail
 # DB_TYPE (mysql or postgresql), DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
 # AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, AWS_ROLE_ARN, AWS_REGION, S3_BUCKET, S3_PREFIX, PERIODICITY
 # DUMP_OPTIONS (specific options for mysqldump or pg_dump)
+# SLACK_WEBHOOK_URL (optional) - URL do webhook do Slack para notificações
+# SLACK_CHANNEL (optional) - Canal específico para enviar mensagens
+# SLACK_USERNAME (optional) - Nome do usuário que aparecerá como remetente
+# SLACK_NOTIFY_SUCCESS (optional) - Se "true", envia notificações de sucesso também
+
+# Função para notificar falhas no Slack
+notify_failure() {
+    local error_msg="$1"
+    local context="$2"
+    if [ -f "/usr/local/bin/notify_slack.sh" ]; then
+        /usr/local/bin/notify_slack.sh failure "$error_msg" "$context" || true
+    fi
+}
+
+# Função para notificar sucesso no Slack
+notify_success() {
+    local s3_path="$1"
+    local dump_size="$2"
+    if [ -f "/usr/local/bin/notify_slack.sh" ]; then
+        /usr/local/bin/notify_slack.sh success "$s3_path" "$dump_size" || true
+    fi
+}
 
 if [ -z "$DB_TYPE" ]; then
-  echo "Error: DB_TYPE must be specified (mysql or postgresql)"
+  error_msg="DB_TYPE must be specified (mysql or postgresql)"
+  echo "Error: $error_msg"
+  notify_failure "$error_msg" "Configuration validation failed"
   exit 1
 fi
 
 if [ -z "$PERIODICITY" ]; then
-  echo "Error: PERIODICITY must be specified (e.g., daily, weekly, monthly, yearly)"
+  error_msg="PERIODICITY must be specified (e.g., daily, weekly, monthly, yearly)"
+  echo "Error: $error_msg"
+  notify_failure "$error_msg" "Configuration validation failed"
   exit 1
 fi
 
@@ -28,7 +54,9 @@ if [ -n "$AWS_ROLE_ARN" ]; then
     # Read the token from the file
     WEB_IDENTITY_TOKEN=$(cat /var/run/secrets/eks.amazonaws.com/serviceaccount/token)
     if [ -z "$WEB_IDENTITY_TOKEN" ]; then
-      echo "Error: Service account token is empty"
+      error_msg="Service account token is empty"
+      echo "Error: $error_msg"
+      notify_failure "$error_msg" "AWS authentication failed - IRSA token issue"
       exit 1
     fi
     
@@ -87,7 +115,9 @@ case "$DB_TYPE" in
     export MYSQL_PWD="$DB_PASSWORD"
     echo "Executing mysqldump..."
     if ! mysqldump $DUMP_OPTIONS -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" "$DB_NAME" | gzip > "$DUMP_FILE_GZ"; then
-      echo "Error: mysqldump execution failed"
+      error_msg="mysqldump execution failed"
+      echo "Error: $error_msg"
+      notify_failure "$error_msg" "MySQL dump process failed - check database connectivity and credentials"
       rm -f "$DUMP_FILE_GZ"
       exit 1
     fi
@@ -96,33 +126,43 @@ case "$DB_TYPE" in
     export PGPASSWORD="$DB_PASSWORD"
     echo "Executing pg_dump..."
     if ! pg_dump $DUMP_OPTIONS -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "$DB_USER" "$DB_NAME" | gzip > "$DUMP_FILE_GZ"; then
-      echo "Error: pg_dump execution failed"
+      error_msg="pg_dump execution failed"
+      echo "Error: $error_msg"
+      notify_failure "$error_msg" "PostgreSQL dump process failed - check database connectivity and credentials"
       rm -f "$DUMP_FILE_GZ"
       exit 1
     fi
     ;;
   *)
-    echo "Error: DB_TYPE must be 'mysql' or 'postgresql', received: $DB_TYPE"
+    error_msg="DB_TYPE must be 'mysql' or 'postgresql', received: $DB_TYPE"
+    echo "Error: $error_msg"
+    notify_failure "$error_msg" "Invalid database type configuration"
     exit 1
     ;;
 esac
 
 # Check if the file was created and is not empty
 if [ ! -f "$DUMP_FILE_GZ" ]; then
-  echo "Error: Dump file was not created"
+  error_msg="Dump file was not created"
+  echo "Error: $error_msg"
+  notify_failure "$error_msg" "File system issue - dump file creation failed"
   exit 1
 fi
 
 # Check if the file has content
 if [ ! -s "$DUMP_FILE_GZ" ]; then
-  echo "Error: Dump file is empty"
+  error_msg="Dump file is empty"
+  echo "Error: $error_msg"
+  notify_failure "$error_msg" "Database dump resulted in empty file - check database contents and permissions"
   rm -f "$DUMP_FILE_GZ"
   exit 1
 fi
 
 # Check if the compressed file is valid
 if ! gzip -t "$DUMP_FILE_GZ"; then
-  echo "Error: Dump file is corrupted"
+  error_msg="Dump file is corrupted"
+  echo "Error: $error_msg"
+  notify_failure "$error_msg" "File compression failed - dump file is corrupted"
   rm -f "$DUMP_FILE_GZ"
   exit 1
 fi
@@ -138,11 +178,16 @@ echo "[DEBUG] S3_PATH: $S3_PATH"
 echo "Uploading to S3..."
 echo "Destination path: $S3_PATH"
 if ! aws s3 cp "$DUMP_FILE_GZ" "$S3_PATH"; then
-  echo "Error: Failed to upload to S3"
+  error_msg="Failed to upload to S3"
+  echo "Error: $error_msg"
+  notify_failure "$error_msg" "S3 upload failed - check AWS credentials, bucket permissions, and network connectivity"
   rm -f "$DUMP_FILE_GZ"
   exit 1
 fi
 
 rm "$DUMP_FILE_GZ"
 
-echo "Dump completed successfully: $S3_PATH" 
+echo "Dump completed successfully: $S3_PATH"
+
+# Enviar notificação de sucesso se configurado
+notify_success "$S3_PATH" "$DUMP_SIZE" 
