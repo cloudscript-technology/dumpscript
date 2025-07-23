@@ -17,6 +17,7 @@ notify_failure() {
     local context="$2"
     if [ -f "/usr/local/bin/notify_slack.sh" ]; then
         /usr/local/bin/notify_slack.sh failure "$error_msg" "$context" || true
+        export NOTIFICATION_SENT=true
     fi
 }
 

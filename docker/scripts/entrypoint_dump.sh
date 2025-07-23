@@ -10,13 +10,14 @@ notify_failure() {
     local context="$2"
     if [ -f "/usr/local/bin/notify_slack.sh" ]; then
         /usr/local/bin/notify_slack.sh failure "$error_msg" "$context" || true
+        export NOTIFICATION_SENT=true
     fi
 }
 
 # Trap para capturar falhas não tratadas
 cleanup_on_failure() {
     local exit_code=$?
-    if [ $exit_code -ne 0 ]; then
+    if [ $exit_code -ne 0 ] && [ "$NOTIFICATION_SENT" != "true" ]; then
         notify_failure "Dump process failed with exit code $exit_code" "Unexpected error during dump execution"
     fi
     exit $exit_code
