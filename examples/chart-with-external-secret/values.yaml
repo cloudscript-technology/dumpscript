@@ -22,6 +22,14 @@ dumpscript:
     schedule: "0 2 * * *"
     extraArgs: "--format plain --encoding UTF8"
 
+  notifications:
+    slack:
+      enabled: false
+      webhookUrl: "https://hooks.slack.com/services/path/to/your/webhook"
+      channel: "my-alerts-channel"
+      username: "Dumpscript Bot"
+      notifyOnSuccess: true
+
   serviceAccount:
     create: true
     automount: true
