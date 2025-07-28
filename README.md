@@ -11,6 +11,8 @@ Database dump and restore tool with configurable client versions.
 
 - Support for PostgreSQL and MySQL/MariaDB databases
 - **Runtime configurable database client versions** - No need to rebuild images
+- **Multiple backup schedules** - Support for daily, weekly, monthly, and yearly backups per database
+- **Slack notifications** - Optional notifications for backup status
 - Automatic S3 upload of database dumps
 - AWS IAM role support for secure access
 - Kubernetes CronJob deployment via Helm chart
@@ -92,10 +94,19 @@ Supported versions:
 
 ### Helm Chart Example
 
+#### Simple Configuration
+
 ```yaml
 databases:
   - type: postgresql
-    version: "16"  # Matches PostgreSQL server version
+    version: "17"  # Matches PostgreSQL server version
+    periodicity:
+      - type: daily
+        retentionDays: 7
+        schedule: "0 2 * * *"  # Daily at 2:00 AM
+      - type: weekly
+        retentionDays: 30
+        schedule: "0 3 * * 0"  # Weekly on Sunday at 3:00 AM
     connectionInfo:
       host: "postgres.example.com"
       username: "backup_user"
@@ -106,11 +117,17 @@ databases:
       region: "us-east-1"
       bucket: "my-db-backups"
       bucketPrefix: "postgresql/production"
-    schedule: "0 2 * * *"  # Daily at 2 AM
     extraArgs: "--no-owner --no-acl"
     
   - type: mysql
-    version: "8.0"  # Matches MySQL server version
+    version: "10.11"  # Matches MariaDB server version
+    periodicity:
+      - type: daily
+        retentionDays: 14
+        schedule: "0 1 * * *"  # Daily at 1:00 AM
+      - type: monthly
+        retentionDays: 365
+        schedule: "0 4 1 * *"  # Monthly on 1st at 4:00 AM
     connectionInfo:
       host: "mysql.example.com"
       username: "backup_user"
@@ -121,8 +138,134 @@ databases:
       region: "us-east-1"
       bucket: "my-db-backups"
       bucketPrefix: "mysql/app"
-    schedule: "0 3 * * *"  # Daily at 3 AM
     extraArgs: "--single-transaction --routines"
+```
+
+#### Advanced Configuration with Slack Notifications
+
+```yaml
+databases:
+  - type: postgresql
+    version: "16"
+    periodicity:
+      - type: daily
+        retentionDays: 7
+        schedule: "0 2 * * *"
+      - type: weekly
+        retentionDays: 30
+        schedule: "0 3 * * 0"
+      - type: monthly
+        retentionDays: 365
+        schedule: "0 4 1 * *"
+    connectionInfo:
+      secretName: "postgres-credentials"
+    aws:
+      secretName: "aws-credentials"
+      region: "us-east-1"
+      bucket: "secure-backups"
+      bucketPrefix: "production/postgres/"
+    extraArgs: "--verbose --single-transaction"
+
+notifications:
+  slack:
+    enabled: true
+    webhookUrl: "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK"
+    channel: "#backups"
+    username: "Dumpscript Bot"
+    notifyOnSuccess: false
+
+serviceAccount:
+  create: true
+  annotations:
+    eks.amazonaws.com/role-arn: "arn:aws:iam::123456789012:role/DatabaseBackupRole"
+```
+
+#### Multiple Databases with Different Versions
+
+```yaml
+databases:
+  # Production PostgreSQL
+  - type: postgresql
+    version: "17"
+    periodicity:
+      - type: daily
+        retentionDays: 30
+        schedule: "0 1 * * *"
+      - type: monthly
+        retentionDays: 365
+        schedule: "0 4 1 * *"
+    connectionInfo:
+      secretName: "prod-postgres-creds"
+    aws:
+      secretName: "prod-aws-creds"
+      region: "us-west-2"
+      bucket: "secure-backups"
+      bucketPrefix: "production/postgres/"
+    extraArgs: "--verbose --single-transaction"
+
+  # Development MySQL
+  - type: mysql
+    version: "8.0"
+    periodicity:
+      - type: daily
+        retentionDays: 14
+        schedule: "0 2 * * *"
+      - type: weekly
+        retentionDays: 60
+        schedule: "0 3 * * 0"
+    connectionInfo:
+      secretName: "dev-mysql-creds"
+    aws:
+      secretName: "dev-aws-creds"
+      region: "us-west-2"
+      bucket: "secure-backups"
+      bucketPrefix: "develop/mysql/"
+    extraArgs: "--opt --single-transaction"
+
+  # Test PostgreSQL
+  - type: postgresql
+    version: "15"
+    periodicity:
+      - type: weekly
+        retentionDays: 90
+        schedule: "0 0 * * 0"
+    connectionInfo:
+      secretName: "test-postgres-creds"
+    aws:
+      secretName: "test-aws-creds"
+      region: "us-west-2"
+      bucket: "secure-backups"
+      bucketPrefix: "test/postgres/"
+    extraArgs: "--clean --if-exists"
+```
+
+## Multiple Backup Schedules
+
+Each database can have multiple backup schedules with different retention policies:
+
+- **Daily backups**: Short-term retention (7-30 days)
+- **Weekly backups**: Medium-term retention (30-90 days)
+- **Monthly backups**: Long-term retention (90-365 days)
+- **Yearly backups**: Long-term archival (365+ days)
+
+This allows for flexible backup strategies like:
+- Daily backups for quick recovery
+- Weekly backups for medium-term retention
+- Monthly backups for compliance
+- Yearly backups for long-term archival
+
+## Slack Notifications
+
+Enable Slack notifications to monitor backup status:
+
+```yaml
+notifications:
+  slack:
+    enabled: true
+    webhookUrl: "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK"
+    channel: "#backups"  # Optional
+    username: "Dumpscript Bot"  # Optional
+    notifyOnSuccess: false  # Only notify on failures by default
 ```
 
 ## How It Works
@@ -131,7 +274,9 @@ databases:
 2. **Dynamic Client Installation**: The appropriate database client is installed using Alpine's package manager
 3. **Version Verification**: The installation is verified and client version is logged
 4. **Database Operations**: The original dump/restore scripts are executed with the correct client version
-5. **S3 Path Structure**: The dump is uploaded to S3 at the path: `s3://$S3_BUCKET/$S3_PREFIX/$PERIODICITY/$YEAR/$MONTH/$DAY/$DUMP_FILE_GZ` (e.g., `daily`, `weekly`, `monthly`, `yearly`)
+5. **Multiple Schedules**: Each database can have multiple backup schedules with different retention policies
+6. **S3 Path Structure**: The dump is uploaded to S3 at the path: `s3://$S3_BUCKET/$S3_PREFIX/$PERIODICITY/$YEAR/$MONTH/$DAY/$DUMP_FILE_GZ` (e.g., `daily`, `weekly`, `monthly`, `yearly`)
+7. **Notifications**: Optional Slack notifications for backup status
 
 ## Building
 
@@ -151,7 +296,8 @@ docker build -t dumpscript-restore:latest -f docker/Dockerfile.restore .
 - `scripts/restore_db_from_s3.sh` - Database restore script
 - `scripts/install_db_clients.sh` - Dynamic client installation script
 - `scripts/entrypoint_dump.sh` - Dump container entrypoint
-- `scripts/entrypoint_restore.sh` - Restore container entrypoint 
+- `scripts/entrypoint_restore.sh` - Restore container entrypoint
+- `scripts/notify_slack.sh` - Slack notification script
 
 ## AWS IAM Policy Requirements
 

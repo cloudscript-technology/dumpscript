@@ -11,8 +11,16 @@ dumpscript:
   databases:
   - type: postgresql
     version: "16"
-    periodicity: daily
-    retentionDays: 7
+    periodicity:
+    - type: daily
+      retentionDays: 7
+      schedule: "0 1 * * *" # Every day at 1am
+    - type: weekly
+      retentionDays: 30
+      schedule: "0 2 * * *" # Every day at 2am
+    - type: monthly
+      retentionDays: 365
+      schedule: "0 3 * * *" # Every day at 3am
     connectionInfo:
       host: "my-host"
       port: 5432
@@ -23,7 +31,6 @@ dumpscript:
       region: "us-east-1"
       bucket: "my-bucket-name"
       bucketPrefix: "my-database-name"
-    schedule: "0 2 * * *" # Every day at 2am
     extraArgs: "--format plain --encoding UTF8"
 
   notifications:
