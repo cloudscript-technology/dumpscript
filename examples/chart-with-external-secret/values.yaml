@@ -17,10 +17,10 @@ dumpscript:
       schedule: "0 1 * * *" # Every day at 1am
     - type: weekly
       retentionDays: 30
-      schedule: "0 2 * * *" # Every day at 2am
+      schedule: "0 2 * * 0" # Every monday at 2am
     - type: monthly
       retentionDays: 365
-      schedule: "0 3 * * *" # Every day at 3am
+      schedule: "0 3 1 * *" # Every first day of the month at 3am
     connectionInfo:
       secretName: database-secret
     aws:
