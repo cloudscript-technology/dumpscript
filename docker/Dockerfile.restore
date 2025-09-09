@@ -2,6 +2,8 @@ FROM alpine:3.20
 
 WORKDIR /dumpscript
 
+RUN addgroup -S cloudscript && adduser -S dumpscript -G cloudscript
+
 # Instalar dependências base e ferramentas necessárias
 RUN apk add --no-cache \
     aws-cli \
@@ -17,13 +19,18 @@ LABEL org.opencontainers.image.title="dumpscript-restore" \
       org.opencontainers.image.description="Database restore tool with runtime configurable client versions"
 
 # Copiar scripts
-COPY ./scripts/restore_db_from_s3.sh /usr/local/bin/restore_db_from_s3.sh
-COPY ./scripts/install_db_clients.sh /usr/local/bin/install_db_clients.sh
-COPY ./scripts/entrypoint_restore.sh /usr/local/bin/entrypoint_restore.sh
+COPY --chown=dumpscript:cloudscript ./scripts/restore_db_from_s3.sh /usr/local/bin/restore_db_from_s3.sh
+COPY --chown=dumpscript:cloudscript ./scripts/install_db_clients.sh /usr/local/bin/install_db_clients.sh
+COPY --chown=dumpscript:cloudscript ./scripts/entrypoint_restore.sh /usr/local/bin/entrypoint_restore.sh
 
 # Dar permissões de execução
 RUN chmod +x /usr/local/bin/restore_db_from_s3.sh \
     && chmod +x /usr/local/bin/install_db_clients.sh \
     && chmod +x /usr/local/bin/entrypoint_restore.sh
+
+# Garantir que o diretório /dumpscript tenha as permissões corretas
+RUN chown -R dumpscript:cloudscript /dumpscript
+
+USER dumpscript
 
 ENTRYPOINT ["/usr/local/bin/entrypoint_restore.sh"]

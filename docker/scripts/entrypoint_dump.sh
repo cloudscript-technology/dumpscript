@@ -26,6 +26,18 @@ trap cleanup_on_failure EXIT
 
 echo "=== DumpScript Container Starting ==="
 echo "DB_TYPE: $DB_TYPE"
+echo "[DEBUG] Current working directory: $(pwd)"
+echo "[DEBUG] Workdir /dumpscript exists: $([ -d /dumpscript ] && echo 'YES' || echo 'NO')"
+echo "[DEBUG] Workdir /dumpscript permissions: $(ls -ld /dumpscript 2>/dev/null || echo 'Directory not accessible')"
+
+# Check if we're already in the correct directory
+if [ "$(pwd)" != "/dumpscript" ]; then
+    echo "[DEBUG] Not in /dumpscript directory, changing to /dumpscript..."
+    cd /dumpscript
+    echo "[DEBUG] New working directory: $(pwd)"
+else
+    echo "[DEBUG] Already in /dumpscript directory, no need to change"
+fi
 echo "[DEBUG] DB_TYPE: $DB_TYPE"
 if [ "$DB_TYPE" = "postgresql" ]; then
   echo "[DEBUG] POSTGRES_VERSION: ${POSTGRES_VERSION:-16}"

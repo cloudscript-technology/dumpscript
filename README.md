@@ -278,6 +278,85 @@ notifications:
 6. **S3 Path Structure**: The dump is uploaded to S3 at the path: `s3://$S3_BUCKET/$S3_PREFIX/$PERIODICITY/$YEAR/$MONTH/$DAY/$DUMP_FILE_GZ` (e.g., `daily`, `weekly`, `monthly`, `yearly`)
 7. **Notifications**: Optional Slack notifications for backup status
 
+## Storage Requirements
+
+### ⚠️ Critical: Sufficient Storage in `/dumpscript` Directory
+
+The DumpScript container uses the `/dumpscript` directory as its working directory and **temporary storage** for database dumps before uploading to S3. It is **critical** to ensure this directory has sufficient storage space to accommodate the full size of your database dump.
+
+#### Why Storage Space Matters
+
+- **Temporary Storage**: Database dumps are created locally in `/dumpscript` before being compressed and uploaded to S3
+- **Compression Process**: The dump is compressed using gzip, which requires additional temporary space during compression
+- **No Streaming**: The current implementation creates the complete dump file locally before uploading (not streaming)
+- **Failure Risk**: Insufficient space will cause the backup process to fail with "No space left on device" errors
+
+#### Storage Space Calculation
+
+**Minimum Required Space:**
+```
+Required Space = Database Size × 1.5
+```
+
+**Recommended Space:**
+```
+Recommended Space = Database Size × 2.0
+```
+
+#### Examples
+
+| Database Size | Minimum Space | Recommended Space |
+|---------------|---------------|-------------------|
+| 1 GB          | 1.5 GB        | 2 GB              |
+| 10 GB         | 15 GB         | 20 GB             |
+| 100 GB        | 150 GB        | 200 GB            |
+| 500 GB        | 750 GB        | 1 TB              |
+
+#### Kubernetes Configuration
+
+When deploying via Helm chart, ensure your pod has sufficient storage:
+
+```yaml
+# Example: Using emptyDir with size limit
+volumeMounts:
+  - name: data
+    mountPath: /dumpscript
+volumes:
+  - name: data
+    emptyDir:
+      sizeLimit: 20Gi  # Adjust based on your database size
+```
+
+#### Docker Configuration
+
+When running with Docker, ensure the container has access to sufficient storage:
+
+```bash
+# Using tmpfs with size limit
+docker run --tmpfs /dumpscript:rw,size=20g ...
+
+# Using volume mount with size limit
+docker run -v /host/storage:/dumpscript:rw ...
+```
+
+#### Monitoring Storage Usage
+
+The container includes debug logs to monitor storage usage:
+
+```
+[DEBUG] Available space in /dumpscript: Filesystem      Size  Used Avail Use% Mounted on
+[DEBUG] Available space in /dumpscript: tmpfs           20G   1.2G   19G   6% /dumpscript
+```
+
+#### Troubleshooting Storage Issues
+
+If you encounter storage-related failures:
+
+1. **Check available space**: Look for `[DEBUG] Available space in /dumpscript` in logs
+2. **Monitor during backup**: Watch space usage during the dump process
+3. **Increase storage**: Add more storage to the `/dumpscript` directory
+4. **Consider database size**: Large databases may require significant temporary storage
+
 ## Building
 
 ```bash

@@ -102,7 +102,16 @@ DAY=$(date +%d)
 DUMP_FILE="dump_$(date +%Y%m%d_%H%M%S).sql"
 DUMP_FILE_GZ="$DUMP_FILE.gz"
 
+echo "[DEBUG] Dump file name: $DUMP_FILE"
+echo "[DEBUG] Dump file with compression: $DUMP_FILE_GZ"
+echo "[DEBUG] Full path for dump file: $(pwd)/$DUMP_FILE_GZ"
+echo "[DEBUG] Absolute path for dump file: /dumpscript/$DUMP_FILE_GZ"
+
 echo "Starting database dump..."
+echo "[DEBUG] Current working directory: $(pwd)"
+echo "[DEBUG] Workdir /dumpscript exists: $([ -d /dumpscript ] && echo 'YES' || echo 'NO')"
+echo "[DEBUG] Workdir /dumpscript permissions: $(ls -ld /dumpscript 2>/dev/null || echo 'Directory not accessible')"
+echo "[DEBUG] Available space in /dumpscript: $(df -h /dumpscript 2>/dev/null || echo 'Unable to check space')"
 echo "[DEBUG] DB_TYPE: $DB_TYPE"
 echo "[DEBUG] DB_HOST: $DB_HOST"
 echo "[DEBUG] DB_USER: $DB_USER"
@@ -143,9 +152,21 @@ case "$DB_TYPE" in
 esac
 
 # Check if the file was created and is not empty
+echo "[DEBUG] Checking if dump file was created..."
+echo "[DEBUG] Looking for file: $DUMP_FILE_GZ"
+echo "[DEBUG] File exists check: $([ -f "$DUMP_FILE_GZ" ] && echo 'YES' || echo 'NO')"
+echo "[DEBUG] Current directory contents:"
+ls -la . 2>/dev/null || echo "Unable to list directory contents"
+echo "[DEBUG] Files matching dump pattern:"
+ls -la dump_* 2>/dev/null || echo "No files matching dump pattern found"
+
 if [ ! -f "$DUMP_FILE_GZ" ]; then
   error_msg="Dump file was not created"
   echo "Error: $error_msg"
+  echo "[DEBUG] Expected file: $DUMP_FILE_GZ"
+  echo "[DEBUG] Current working directory: $(pwd)"
+  echo "[DEBUG] Directory contents:"
+  ls -la . 2>/dev/null || echo "Unable to list directory contents"
   notify_failure "$error_msg" "File system issue - dump file creation failed"
   exit 1
 fi
@@ -170,6 +191,15 @@ fi
 
 DUMP_SIZE=$(stat -c%s "$DUMP_FILE_GZ")
 echo "Dump file created successfully. Size: $DUMP_SIZE bytes"
+echo "[DEBUG] File location details:"
+echo "[DEBUG] - File name: $DUMP_FILE_GZ"
+echo "[DEBUG] - Full path: $(pwd)/$DUMP_FILE_GZ"
+echo "[DEBUG] - Absolute path: /dumpscript/$DUMP_FILE_GZ"
+echo "[DEBUG] - File size: $DUMP_SIZE bytes"
+echo "[DEBUG] - File permissions: $(ls -l "$DUMP_FILE_GZ" 2>/dev/null || echo 'Unable to get file info')"
+echo "[DEBUG] - File owner: $(stat -c '%U:%G' "$DUMP_FILE_GZ" 2>/dev/null || echo 'Unable to get owner info')"
+echo "[DEBUG] - Directory contents after creation:"
+ls -la . 2>/dev/null || echo "Unable to list directory contents"
 
 # Construct the S3 path with data structure: bucket/prefix/periodicity/year/month/day/file
 S3_PATH="s3://$S3_BUCKET/$S3_PREFIX/$PERIODICITY/$YEAR/$MONTH/$DAY/$DUMP_FILE_GZ"
