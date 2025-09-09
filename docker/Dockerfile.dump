@@ -2,8 +2,6 @@ FROM alpine:3.20
 
 WORKDIR /dumpscript
 
-RUN addgroup -S cloudscript && adduser -S dumpscript -G cloudscript
-
 # Instalar dependências base e ferramentas necessárias
 RUN apk add --no-cache \
     aws-cli \
@@ -20,11 +18,11 @@ LABEL org.opencontainers.image.title="dumpscript" \
       org.opencontainers.image.description="Database dump tool with runtime configurable client versions"
 
 # Copiar scripts
-COPY --chown=dumpscript:cloudscript ./scripts/dump_db_to_s3.sh /usr/local/bin/dump_db_to_s3.sh
-COPY --chown=dumpscript:cloudscript ./scripts/install_db_clients.sh /usr/local/bin/install_db_clients.sh
-COPY --chown=dumpscript:cloudscript ./scripts/remove_old_backups.sh /usr/local/bin/remove_old_backups.sh
-COPY --chown=dumpscript:cloudscript ./scripts/entrypoint_dump.sh /usr/local/bin/entrypoint_dump.sh
-COPY --chown=dumpscript:cloudscript ./scripts/notify_slack.sh /usr/local/bin/notify_slack.sh
+COPY ./scripts/dump_db_to_s3.sh /usr/local/bin/dump_db_to_s3.sh
+COPY ./scripts/install_db_clients.sh /usr/local/bin/install_db_clients.sh
+COPY ./scripts/remove_old_backups.sh /usr/local/bin/remove_old_backups.sh
+COPY ./scripts/entrypoint_dump.sh /usr/local/bin/entrypoint_dump.sh
+COPY ./scripts/notify_slack.sh /usr/local/bin/notify_slack.sh
 
 # Dar permissões de execução
 RUN chmod +x /usr/local/bin/dump_db_to_s3.sh \
@@ -32,11 +30,6 @@ RUN chmod +x /usr/local/bin/dump_db_to_s3.sh \
     && chmod +x /usr/local/bin/remove_old_backups.sh \
     && chmod +x /usr/local/bin/entrypoint_dump.sh \
     && chmod +x /usr/local/bin/notify_slack.sh
-
-# Garantir que o diretório /dumpscript tenha as permissões corretas
-RUN chown -R dumpscript:cloudscript /dumpscript
-
-USER dumpscript
 
 # Espera que todas as variáveis estejam setadas no ambiente
 # DB_TYPE (mysql ou postgresql), DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
