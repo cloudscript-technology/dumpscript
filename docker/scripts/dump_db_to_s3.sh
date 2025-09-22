@@ -216,40 +216,33 @@ ls -la . 2>/dev/null || echo "Unable to list directory contents"
 S3_PATH="s3://$S3_BUCKET/$S3_PREFIX/$PERIODICITY/$YEAR/$MONTH/$DAY/$DUMP_FILE_GZ"
 echo "[DEBUG] S3_PATH: $S3_PATH"
 
-# Refresh AWS credentials before S3 upload (in case the dump took a long time and tokens expired)
-echo "Refreshing AWS credentials before S3 upload..."
-if ! assume_aws_role; then
-    echo "Warning: Failed to refresh AWS credentials, attempting S3 upload with existing credentials"
+# Upload to S3 using robust upload system with automatic credential refresh
+echo "Uploading to S3 with automatic credential refresh..."
+echo "Destination path: $S3_PATH"
+
+# Verificar se o script de upload robusto existe
+if [ ! -f "/usr/local/bin/s3_upload_with_refresh.sh" ]; then
+  error_msg="S3 upload script not found"
+  echo "Error: $error_msg"
+  notify_failure "$error_msg" "Missing s3_upload_with_refresh.sh script - check container build"
+  rm -f "$DUMP_FILE_GZ"
+  exit 1
 fi
 
-# Upload to S3
-echo "Uploading to S3..."
-echo "Destination path: $S3_PATH"
-if ! aws s3 cp "$DUMP_FILE_GZ" "$S3_PATH"; then
-  error_msg="Failed to upload to S3"
+# Usar o sistema robusto de upload com refresh automático
+if ! /usr/local/bin/s3_upload_with_refresh.sh "$DUMP_FILE_GZ" "$S3_PATH" "assume_aws_role"; then
+  error_msg="Failed to upload to S3 after multiple attempts with credential refresh"
   echo "Error: $error_msg"
-  
-  # If S3 upload fails, try refreshing credentials once more and retry
-  echo "S3 upload failed, attempting to refresh credentials and retry..."
-  if assume_aws_role; then
-    echo "Credentials refreshed, retrying S3 upload..."
-    if ! aws s3 cp "$DUMP_FILE_GZ" "$S3_PATH"; then
-      error_msg="Failed to upload to S3 after credential refresh"
-      echo "Error: $error_msg"
-      notify_failure "$error_msg" "S3 upload failed even after credential refresh - check bucket permissions and network connectivity"
-      rm -f "$DUMP_FILE_GZ"
-      exit 1
-    fi
-  else
-    notify_failure "$error_msg" "S3 upload failed and credential refresh also failed - check AWS credentials, bucket permissions, and network connectivity"
-    rm -f "$DUMP_FILE_GZ"
-    exit 1
-  fi
+  notify_failure "$error_msg" "S3 upload failed even after multiple retries and credential refresh - check bucket permissions, network connectivity, and AWS credentials"
+  rm -f "$DUMP_FILE_GZ"
+  exit 1
 fi
+
+echo "S3 upload completed successfully with robust retry mechanism"
 
 rm "$DUMP_FILE_GZ"
 
 echo "Dump completed successfully: $S3_PATH"
 
 # Enviar notificação de sucesso se configurado
-notify_success "$S3_PATH" "$DUMP_SIZE" 
+notify_success "$S3_PATH" "$DUMP_SIZE"
