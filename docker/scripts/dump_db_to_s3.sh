@@ -30,62 +30,14 @@ notify_success() {
     fi
 }
 
-# Função para assumir role AWS (reutilizável)
-assume_aws_role() {
-    if [ -z "$AWS_ROLE_ARN" ]; then
-        echo "No AWS_ROLE_ARN defined, skipping role assumption"
-        return 0
-    fi
-
-    echo "Assuming AWS role: $AWS_ROLE_ARN"
-    
-    # Check if the service account token is available
-    if [ -f "/var/run/secrets/eks.amazonaws.com/serviceaccount/token" ]; then
-        echo "Service account token found"
-        
-        # Read the token from the file
-        WEB_IDENTITY_TOKEN=$(cat /var/run/secrets/eks.amazonaws.com/serviceaccount/token)
-        if [ -z "$WEB_IDENTITY_TOKEN" ]; then
-            error_msg="Service account token is empty"
-            echo "Error: $error_msg"
-            notify_failure "$error_msg" "AWS authentication failed - IRSA token issue"
-            return 1
-        fi
-        
-        export AWS_ROLE_SESSION_NAME="dumpscript-$(date +%s)"
-        
-        # Assume the role using the service account token
-        echo "Assuming role using IRSA..."
-        echo "Role ARN: $AWS_ROLE_ARN"
-        echo "Role Session Name: $AWS_ROLE_SESSION_NAME"
-        
-        TEMP_ROLE=$(aws sts assume-role-with-web-identity \
-          --role-arn "$AWS_ROLE_ARN" \
-          --role-session-name "$AWS_ROLE_SESSION_NAME" \
-          --web-identity-token "$WEB_IDENTITY_TOKEN" \
-          --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' \
-          --output text)
-        
-        if [ $? -ne 0 ]; then
-            echo "Error assuming role. Attempting to use default credentials."
-            return 1
-        else
-            export AWS_ACCESS_KEY_ID=$(echo $TEMP_ROLE | cut -d' ' -f1)
-            export AWS_SECRET_ACCESS_KEY=$(echo $TEMP_ROLE | cut -d' ' -f2)
-            export AWS_SESSION_TOKEN=$(echo $TEMP_ROLE | cut -d' ' -f3)
-            
-            echo "Role assumed successfully!"
-            echo "AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:0:10}..."
-            return 0
-        fi
-    else
-        echo "Warning: Service account token not found at /var/run/secrets/eks.amazonaws.com/serviceaccount/token"
-        echo "Listing available files:"
-        find /var/run/secrets -name "*token*" -type f 2>/dev/null || echo "No token found"
-        echo "Attempting to use default credentials."
-        return 1
-    fi
-}
+# Source AWS utilities for role assumption functionality
+if [ -f "/usr/local/bin/aws_role_utils.sh" ]; then
+    . /usr/local/bin/aws_role_utils.sh
+elif [ -f "$(dirname "$0")/aws_role_utils.sh" ]; then
+    . "$(dirname "$0")/aws_role_utils.sh"
+else
+    echo "Warning: AWS role utilities not found. Role assumption may not work."
+fi
 
 if [ -z "$DB_TYPE" ]; then
   error_msg="DB_TYPE must be specified (mysql or postgresql)"
@@ -102,7 +54,13 @@ if [ -z "$PERIODICITY" ]; then
 fi
 
 # Assume AWS role if AWS_ROLE_ARN is defined (initial authentication)
-assume_aws_role
+if command -v assume_aws_role >/dev/null 2>&1; then
+  if ! assume_aws_role; then
+    echo "Warning: Failed to assume AWS role, continuing with existing credentials"
+  fi
+else
+  echo "Warning: AWS role utilities not available; proceeding without assuming role"
+fi
 
 # Create data structure for S3 path
 CURRENT_DATE=$(date +%Y-%m-%d)
@@ -216,40 +174,33 @@ ls -la . 2>/dev/null || echo "Unable to list directory contents"
 S3_PATH="s3://$S3_BUCKET/$S3_PREFIX/$PERIODICITY/$YEAR/$MONTH/$DAY/$DUMP_FILE_GZ"
 echo "[DEBUG] S3_PATH: $S3_PATH"
 
-# Refresh AWS credentials before S3 upload (in case the dump took a long time and tokens expired)
-echo "Refreshing AWS credentials before S3 upload..."
-if ! assume_aws_role; then
-    echo "Warning: Failed to refresh AWS credentials, attempting S3 upload with existing credentials"
+# Upload to S3 using robust upload system with automatic credential refresh
+echo "Uploading to S3 with automatic credential refresh..."
+echo "Destination path: $S3_PATH"
+
+# Verificar se o script de upload robusto existe
+if [ ! -f "/usr/local/bin/s3_upload_with_refresh.sh" ]; then
+  error_msg="S3 upload script not found"
+  echo "Error: $error_msg"
+  notify_failure "$error_msg" "Missing s3_upload_with_refresh.sh script - check container build"
+  rm -f "$DUMP_FILE_GZ"
+  exit 1
 fi
 
-# Upload to S3
-echo "Uploading to S3..."
-echo "Destination path: $S3_PATH"
-if ! aws s3 cp "$DUMP_FILE_GZ" "$S3_PATH"; then
-  error_msg="Failed to upload to S3"
+# Usar o sistema robusto de upload com refresh automático
+if ! /usr/local/bin/s3_upload_with_refresh.sh "$DUMP_FILE_GZ" "$S3_PATH" "assume_aws_role"; then
+  error_msg="Failed to upload to S3 after multiple attempts with credential refresh"
   echo "Error: $error_msg"
-  
-  # If S3 upload fails, try refreshing credentials once more and retry
-  echo "S3 upload failed, attempting to refresh credentials and retry..."
-  if assume_aws_role; then
-    echo "Credentials refreshed, retrying S3 upload..."
-    if ! aws s3 cp "$DUMP_FILE_GZ" "$S3_PATH"; then
-      error_msg="Failed to upload to S3 after credential refresh"
-      echo "Error: $error_msg"
-      notify_failure "$error_msg" "S3 upload failed even after credential refresh - check bucket permissions and network connectivity"
-      rm -f "$DUMP_FILE_GZ"
-      exit 1
-    fi
-  else
-    notify_failure "$error_msg" "S3 upload failed and credential refresh also failed - check AWS credentials, bucket permissions, and network connectivity"
-    rm -f "$DUMP_FILE_GZ"
-    exit 1
-  fi
+  notify_failure "$error_msg" "S3 upload failed even after multiple retries and credential refresh - check bucket permissions, network connectivity, and AWS credentials"
+  rm -f "$DUMP_FILE_GZ"
+  exit 1
 fi
+
+echo "S3 upload completed successfully with robust retry mechanism"
 
 rm "$DUMP_FILE_GZ"
 
 echo "Dump completed successfully: $S3_PATH"
 
 # Enviar notificação de sucesso se configurado
-notify_success "$S3_PATH" "$DUMP_SIZE" 
+notify_success "$S3_PATH" "$DUMP_SIZE"

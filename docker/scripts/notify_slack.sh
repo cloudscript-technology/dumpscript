@@ -7,11 +7,26 @@ set -e
 # SLACK_CHANNEL (opcional) - Canal específico para enviar a mensagem
 # SLACK_USERNAME (opcional) - Nome do usuário que aparecerá como remetente
 
+# Append helper for environment info blocks
+append_env_info() {
+    local label="$1"
+    local value="$2"
+
+    if [ -n "$value" ]; then
+        if [ -n "$env_info" ]; then
+            env_info="${env_info}\n"
+        fi
+        env_info="${env_info}${label}: ${value}"
+    fi
+}
+
 # Função para enviar notificação de falha
 send_failure_notification() {
     local error_message="$1"
     local context="$2"
     local timestamp=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+    local ts_epoch=$(date +%s)
+    local hostname=$(hostname)
     
     if [ -z "$SLACK_WEBHOOK_URL" ]; then
         echo "Warning: SLACK_WEBHOOK_URL not configured. Skipping Slack notification."
@@ -20,56 +35,44 @@ send_failure_notification() {
     
     # Preparar dados do contexto
     local env_info=""
-    if [ -n "$DB_TYPE" ]; then env_info="${env_info}Database Type: $DB_TYPE\n"; fi
-    if [ -n "$DB_HOST" ]; then env_info="${env_info}Database Host: $DB_HOST\n"; fi
-    if [ -n "$DB_NAME" ]; then env_info="${env_info}Database Name: $DB_NAME\n"; fi
-    if [ -n "$PERIODICITY" ]; then env_info="${env_info}Backup Frequency: $PERIODICITY\n"; fi
-    if [ -n "$S3_BUCKET" ]; then env_info="${env_info}S3 Bucket: $S3_BUCKET\n"; fi
+    append_env_info "Database Type" "$DB_TYPE"
+    append_env_info "Database Host" "$DB_HOST"
+    append_env_info "Database Name" "$DB_NAME"
+    append_env_info "Backup Frequency" "$PERIODICITY"
+    append_env_info "S3 Bucket" "$S3_BUCKET"
     
     # Construir payload JSON
-    local payload=$(cat <<EOF
-{
-    "channel": "${SLACK_CHANNEL:-#alerts}",
-    "username": "${SLACK_USERNAME:-DumpScript Bot}",
-    "icon_emoji": ":warning:",
-    "attachments": [
-        {
-            "color": "danger",
-            "fallback": "Database Backup Failed: $error_message",
-            "title": ":exclamation: Database Backup Failure",
-            "fields": [
+    local payload
+    payload=$(jq -n \
+        --arg channel "${SLACK_CHANNEL:-#alerts}" \
+        --arg username "${SLACK_USERNAME:-DumpScript Bot}" \
+        --arg error "$error_message" \
+        --arg context "$context" \
+        --arg env "$env_info" \
+        --arg timestamp "$timestamp" \
+        --arg hostname "$hostname" \
+        --argjson ts "$ts_epoch" \
+        '{
+            channel: $channel,
+            username: $username,
+            icon_emoji: ":warning:",
+            attachments: [
                 {
-                    "title": "Error",
-                    "value": "$error_message",
-                    "short": false
-                },
-                {
-                    "title": "Context",
-                    "value": "$context",
-                    "short": false
-                },
-                {
-                    "title": "Environment Details",
-                    "value": "$env_info",
-                    "short": false
-                },
-                {
-                    "title": "Timestamp",
-                    "value": "$timestamp",
-                    "short": true
-                },
-                {
-                    "title": "Hostname",
-                    "value": "$(hostname)",
-                    "short": true
+                    color: "danger",
+                    fallback: "Database Backup Failed: " + $error,
+                    title: ":exclamation: Database Backup Failure",
+                    fields: [
+                        {title: "Error", value: $error, short: false},
+                        {title: "Context", value: $context, short: false},
+                        {title: "Environment Details", value: ($env // ""), short: false},
+                        {title: "Timestamp", value: $timestamp, short: true},
+                        {title: "Hostname", value: $hostname, short: true}
+                    ],
+                    footer: "DumpScript Monitoring",
+                    ts: $ts
                 }
-            ],
-            "footer": "DumpScript Monitoring",
-            "ts": $(date +%s)
-        }
-    ]
-}
-EOF
+            ]
+        }'
     )
     
     echo "Sending Slack notification..."
@@ -91,6 +94,8 @@ send_success_notification() {
     local s3_path="$1"
     local dump_size="$2"
     local timestamp=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+    local ts_epoch=$(date +%s)
+    local hostname=$(hostname)
     
     if [ -z "$SLACK_WEBHOOK_URL" ]; then
         echo "Warning: SLACK_WEBHOOK_URL not configured. Skipping Slack notification."
@@ -104,55 +109,43 @@ send_success_notification() {
     
     # Preparar dados do contexto
     local env_info=""
-    if [ -n "$DB_TYPE" ]; then env_info="${env_info}Database Type: $DB_TYPE\n"; fi
-    if [ -n "$DB_HOST" ]; then env_info="${env_info}Database Host: $DB_HOST\n"; fi
-    if [ -n "$DB_NAME" ]; then env_info="${env_info}Database Name: $DB_NAME\n"; fi
-    if [ -n "$PERIODICITY" ]; then env_info="${env_info}Backup Frequency: $PERIODICITY\n"; fi
+    append_env_info "Database Type" "$DB_TYPE"
+    append_env_info "Database Host" "$DB_HOST"
+    append_env_info "Database Name" "$DB_NAME"
+    append_env_info "Backup Frequency" "$PERIODICITY"
     
     # Construir payload JSON
-    local payload=$(cat <<EOF
-{
-    "channel": "${SLACK_CHANNEL:-#alerts}",
-    "username": "${SLACK_USERNAME:-DumpScript Bot}",
-    "icon_emoji": ":white_check_mark:",
-    "attachments": [
-        {
-            "color": "good",
-            "fallback": "Database Backup Completed Successfully",
-            "title": ":heavy_check_mark: Database Backup Completed",
-            "fields": [
+    local payload
+    payload=$(jq -n \
+        --arg channel "${SLACK_CHANNEL:-#alerts}" \
+        --arg username "${SLACK_USERNAME:-DumpScript Bot}" \
+        --arg s3_path "$s3_path" \
+        --arg dump_size "$dump_size" \
+        --arg env "$env_info" \
+        --arg timestamp "$timestamp" \
+        --arg hostname "$hostname" \
+        --argjson ts "$ts_epoch" \
+        '{
+            channel: $channel,
+            username: $username,
+            icon_emoji: ":white_check_mark:",
+            attachments: [
                 {
-                    "title": "S3 Location",
-                    "value": "$s3_path",
-                    "short": false
-                },
-                {
-                    "title": "Backup Size",
-                    "value": "$dump_size bytes",
-                    "short": true
-                },
-                {
-                    "title": "Environment Details",
-                    "value": "$env_info",
-                    "short": false
-                },
-                {
-                    "title": "Timestamp",
-                    "value": "$timestamp",
-                    "short": true
-                },
-                {
-                    "title": "Hostname",
-                    "value": "$(hostname)",
-                    "short": true
+                    color: "good",
+                    fallback: "Database Backup Completed Successfully",
+                    title: ":heavy_check_mark: Database Backup Completed",
+                    fields: [
+                        {title: "S3 Location", value: $s3_path, short: false},
+                        {title: "Backup Size", value: ($dump_size + " bytes"), short: true},
+                        {title: "Environment Details", value: ($env // ""), short: false},
+                        {title: "Timestamp", value: $timestamp, short: true},
+                        {title: "Hostname", value: $hostname, short: true}
+                    ],
+                    footer: "DumpScript Monitoring",
+                    ts: $ts
                 }
-            ],
-            "footer": "DumpScript Monitoring",
-            "ts": $(date +%s)
-        }
-    ]
-}
-EOF
+            ]
+        }'
     )
     
     echo "Sending Slack success notification..."

@@ -1,5 +1,6 @@
 #!/bin/bash
 set -e
+set -o pipefail
 
 # Required variables
 : "${S3_PREFIX:?S3_PREFIX not defined}"
@@ -28,7 +29,7 @@ echo "[DEBUG] BACKUP_PATH: $BACKUP_PATH"
 echo "[DEBUG] CUTOFF_DATE: $CUTOFF_DATE"
 
 # List, filter, and remove old backups
-aws s3 ls "s3://${S3_BUCKET}/${BACKUP_PATH}" --recursive | while read -r line; do
+if ! aws s3 ls "s3://${S3_BUCKET}/${BACKUP_PATH}" --recursive | while read -r line; do
     file_path=$(echo "$line" | awk '{print $4}')
     [ -z "$file_path" ] && continue
     # Only process files ending with .sql or .sql.gz
@@ -52,4 +53,7 @@ aws s3 ls "s3://${S3_BUCKET}/${BACKUP_PATH}" --recursive | while read -r line; d
     else
         echo "[DEBUG] $backup_date >= $CUTOFF_DATE: keeping"
     fi
-done 
+done; then
+  echo "Error: Failed to list backups at s3://${S3_BUCKET}/${BACKUP_PATH}"
+  exit 1
+fi
