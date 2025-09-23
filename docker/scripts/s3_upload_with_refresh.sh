@@ -48,22 +48,56 @@ check_credential_expiry() {
     return 1  # Não precisa refresh
 }
 
+# Source AWS utilities if available
+if [ -f "/usr/local/bin/aws_role_utils.sh" ]; then
+    . /usr/local/bin/aws_role_utils.sh
+elif [ -f "$(dirname "$0")/aws_role_utils.sh" ]; then
+    . "$(dirname "$0")/aws_role_utils.sh"
+fi
+
 # Função para refresh de credenciais
 refresh_credentials() {
     local refresh_function="$1"
     
-    if [ -n "$refresh_function" ] && command -v "$refresh_function" >/dev/null 2>&1; then
-        log_with_timestamp "Executando refresh de credenciais usando: $refresh_function"
-        if "$refresh_function"; then
-            export LAST_CREDENTIAL_REFRESH=$(date +%s)
-            log_with_timestamp "Credenciais refreshed com sucesso"
-            return 0
-        else
-            log_with_timestamp "Erro ao fazer refresh das credenciais"
-            return 1
-        fi
+    if [ -n "$refresh_function" ]; then
+        # Handle specific known functions
+        case "$refresh_function" in
+            "assume_aws_role")
+                if command -v assume_aws_role >/dev/null 2>&1; then
+                    log_with_timestamp "Executando refresh de credenciais usando: $refresh_function"
+                    if assume_aws_role; then
+                        export LAST_CREDENTIAL_REFRESH=$(date +%s)
+                        log_with_timestamp "Credenciais refreshed com sucesso"
+                        return 0
+                    else
+                        log_with_timestamp "Erro ao fazer refresh das credenciais"
+                        return 1
+                    fi
+                else
+                    log_with_timestamp "Função assume_aws_role não disponível - AWS utilities não carregadas"
+                    return 1
+                fi
+                ;;
+            *)
+                # Try to call the function if it exists
+                if command -v "$refresh_function" >/dev/null 2>&1; then
+                    log_with_timestamp "Executando refresh de credenciais usando: $refresh_function"
+                    if "$refresh_function"; then
+                        export LAST_CREDENTIAL_REFRESH=$(date +%s)
+                        log_with_timestamp "Credenciais refreshed com sucesso"
+                        return 0
+                    else
+                        log_with_timestamp "Erro ao fazer refresh das credenciais"
+                        return 1
+                    fi
+                else
+                    log_with_timestamp "Função de refresh não disponível ou não encontrada: $refresh_function"
+                    return 1
+                fi
+                ;;
+        esac
     else
-        log_with_timestamp "Função de refresh não disponível ou não encontrada: $refresh_function"
+        log_with_timestamp "Nenhuma função de refresh especificada"
         return 1
     fi
 }
