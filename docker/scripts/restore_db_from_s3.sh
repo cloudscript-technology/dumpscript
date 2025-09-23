@@ -23,7 +23,9 @@ fi
 
 # Assume AWS role if AWS_ROLE_ARN is defined (initial authentication)
 if command -v assume_aws_role >/dev/null 2>&1; then
-    assume_aws_role
+    if ! assume_aws_role; then
+        echo "Warning: Failed to assume AWS role, continuing with existing credentials"
+    fi
 else
     echo "Warning: assume_aws_role function not available. Proceeding with default credentials."
 fi

@@ -54,7 +54,13 @@ if [ -z "$PERIODICITY" ]; then
 fi
 
 # Assume AWS role if AWS_ROLE_ARN is defined (initial authentication)
-assume_aws_role
+if command -v assume_aws_role >/dev/null 2>&1; then
+  if ! assume_aws_role; then
+    echo "Warning: Failed to assume AWS role, continuing with existing credentials"
+  fi
+else
+  echo "Warning: AWS role utilities not available; proceeding without assuming role"
+fi
 
 # Create data structure for S3 path
 CURRENT_DATE=$(date +%Y-%m-%d)
