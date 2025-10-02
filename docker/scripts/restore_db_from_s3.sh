@@ -12,51 +12,22 @@ fi
 
 export AWS_REGION
 
-# Assume AWS role if AWS_ROLE_ARN is defined
-if [ -n "$AWS_ROLE_ARN" ]; then
-  echo "Assuming AWS role: $AWS_ROLE_ARN"
-  
-  # Check if the service account token is available
-  if [ -f "/var/run/secrets/eks.amazonaws.com/serviceaccount/token" ]; then
-    echo "Service account token found"
-    
-    # Read the token from the file
-    WEB_IDENTITY_TOKEN=$(cat /var/run/secrets/eks.amazonaws.com/serviceaccount/token)
-    if [ -z "$WEB_IDENTITY_TOKEN" ]; then
-      echo "Error: Service account token is empty"
-      exit 1
+# Source AWS utilities for role assumption functionality
+if [ -f "/usr/local/bin/aws_role_utils.sh" ]; then
+    . /usr/local/bin/aws_role_utils.sh
+elif [ -f "$(dirname "$0")/aws_role_utils.sh" ]; then
+    . "$(dirname "$0")/aws_role_utils.sh"
+else
+    echo "Warning: AWS role utilities not found. Role assumption may not work."
+fi
+
+# Assume AWS role if AWS_ROLE_ARN is defined (initial authentication)
+if command -v assume_aws_role >/dev/null 2>&1; then
+    if ! assume_aws_role; then
+        echo "Warning: Failed to assume AWS role, continuing with existing credentials"
     fi
-    
-    export AWS_ROLE_SESSION_NAME="dumpscript-restore-$(date +%s)"
-    
-    # Assume the role using the service account token
-    echo "Assuming role using IRSA..."
-    echo "Role ARN: $AWS_ROLE_ARN"
-    echo "Role Session Name: $AWS_ROLE_SESSION_NAME"
-    
-    TEMP_ROLE=$(aws sts assume-role-with-web-identity \
-      --role-arn "$AWS_ROLE_ARN" \
-      --role-session-name "$AWS_ROLE_SESSION_NAME" \
-      --web-identity-token "$WEB_IDENTITY_TOKEN" \
-      --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' \
-      --output text)
-    
-    if [ $? -ne 0 ]; then
-      echo "Error assuming role. Trying to use default credentials."
-    else
-      export AWS_ACCESS_KEY_ID=$(echo $TEMP_ROLE | cut -d' ' -f1)
-      export AWS_SECRET_ACCESS_KEY=$(echo $TEMP_ROLE | cut -d' ' -f2)
-      export AWS_SESSION_TOKEN=$(echo $TEMP_ROLE | cut -d' ' -f3)
-      
-      echo "Role assumed successfully!"
-      echo "AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:0:10}..."
-    fi
-  else
-    echo "Warning: Service account token not found at /var/run/secrets/eks.amazonaws.com/serviceaccount/token"
-    echo "Listing available files:"
-    find /var/run/secrets -name "*token*" -type f 2>/dev/null || echo "No token found"
-    echo "Trying to use default credentials."
-  fi
+else
+    echo "Warning: assume_aws_role function not available. Proceeding with default credentials."
 fi
 
 echo "[DEBUG] DB_TYPE: $DB_TYPE"
@@ -101,4 +72,4 @@ esac
 
 rm dump_restore.sql
 
-echo "Restore completed for database $DB_TYPE: $DB_NAME" 
+echo "Restore completed for database $DB_TYPE: $DB_NAME"

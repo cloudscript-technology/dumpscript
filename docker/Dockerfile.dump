@@ -23,13 +23,17 @@ COPY ./scripts/install_db_clients.sh /usr/local/bin/install_db_clients.sh
 COPY ./scripts/remove_old_backups.sh /usr/local/bin/remove_old_backups.sh
 COPY ./scripts/entrypoint_dump.sh /usr/local/bin/entrypoint_dump.sh
 COPY ./scripts/notify_slack.sh /usr/local/bin/notify_slack.sh
+COPY ./scripts/s3_upload_with_refresh.sh /usr/local/bin/s3_upload_with_refresh.sh
+COPY ./scripts/aws_role_utils.sh /usr/local/bin/aws_role_utils.sh
 
 # Dar permissões de execução
 RUN chmod +x /usr/local/bin/dump_db_to_s3.sh \
     && chmod +x /usr/local/bin/install_db_clients.sh \
     && chmod +x /usr/local/bin/remove_old_backups.sh \
     && chmod +x /usr/local/bin/entrypoint_dump.sh \
-    && chmod +x /usr/local/bin/notify_slack.sh
+    && chmod +x /usr/local/bin/notify_slack.sh \
+    && chmod +x /usr/local/bin/s3_upload_with_refresh.sh \
+    && chmod +x /usr/local/bin/aws_role_utils.sh
 
 # Espera que todas as variáveis estejam setadas no ambiente
 # DB_TYPE (mysql ou postgresql), DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
