@@ -9,7 +9,7 @@ Database dump and restore tool with configurable client versions.
 
 ## Features
 
-- Support for PostgreSQL and MySQL/MariaDB databases
+- Support for PostgreSQL, MySQL/MariaDB and MongoDB databases
 - **Runtime configurable database client versions** - No need to rebuild images
 - **Multiple backup schedules** - Support for daily, weekly, monthly, and yearly backups per database
 - **Slack notifications** - Optional notifications for backup status
@@ -35,12 +35,16 @@ Supported versions:
 - `10.11` - MariaDB 10.11 (default)
 - `11.4` - MariaDB 11.4
 
+### MongoDB Tools
+MongoDB backups use `mongodump`/`mongorestore` from MongoDB Database Tools.
+Tools are installed at runtime (no version pinning).
+
 ## Usage
 
 ### Environment Variables
 
 #### Required
-- `DB_TYPE` - Database type (`postgresql` or `mysql`)
+- `DB_TYPE` - Database type (`postgresql`, `mysql` or `mongodb`)
 - `DB_HOST` - Database host
 - `DB_USER` - Database username
 - `DB_PASSWORD` - Database password
@@ -54,9 +58,9 @@ Supported versions:
 #### Optional
 - `POSTGRES_VERSION` - PostgreSQL client version (default: `16`)
 - `MYSQL_VERSION` - MySQL/MariaDB client version (default: `10.11`)
-- `DB_PORT` - Database port (default: 5432 for PostgreSQL, 3306 for MySQL)
+- `DB_PORT` - Database port (default: 5432 for PostgreSQL, 3306 for MySQL, 27017 for MongoDB)
 - `AWS_ROLE_ARN` - AWS IAM role ARN for authentication
-- `DUMP_OPTIONS` - Additional options for `pg_dump` or `mysqldump`
+- `DUMP_OPTIONS` - Additional options for `pg_dump`, `mysqldump` or `mongodump` (e.g., `--authenticationDatabase=admin`)
 
 ### Docker Example
 
@@ -88,6 +92,22 @@ Supported versions:
   -e S3_BUCKET=my-backups \
   -e S3_PREFIX=mysql-dumps \
   -e PERIODICITY=weekly \
+  -e RETENTION_DAYS=7 \
+  ghcr.io/cloudscript-technology/dumpscript:latest
+
+# MongoDB daily dump
+ docker run --rm \
+  -e DB_TYPE=mongodb \
+  -e DB_HOST=localhost \
+  -e DB_USER=user \
+  -e DB_PASSWORD=password \
+  -e DB_NAME=mydb \
+  -e DB_PORT=27017 \
+  -e DUMP_OPTIONS="--authenticationDatabase=admin" \
+  -e AWS_REGION=us-east-1 \
+  -e S3_BUCKET=my-backups \
+  -e S3_PREFIX=mongodb-dumps \
+  -e PERIODICITY=daily \
   -e RETENTION_DAYS=7 \
   ghcr.io/cloudscript-technology/dumpscript:latest
 ```
@@ -140,6 +160,34 @@ databases:
       bucketPrefix: "mysql/app"
     extraArgs: "--single-transaction --routines"
 ```
+
+#### MongoDB Configuration
+
+```yaml
+databases:
+  - type: mongodb
+    periodicity:
+      - type: daily
+        retentionDays: 7
+        schedule: "0 2 * * *"  # Daily at 2:00 AM
+    connectionInfo:
+      host: "mongo.example.com"
+      username: "backup_user"
+      password: "secure_password"
+      database: "app_db"
+      port: 27017
+    aws:
+      region: "us-east-1"
+      bucket: "my-db-backups"
+      bucketPrefix: "mongodb/app"
+    extraArgs: "--authenticationDatabase=admin"  # Adjust if auth DB differs
+```
+
+MongoDB backup notes:
+- Uses `mongodump` to create a compressed archive (`dump_restore.archive.gz`).
+- Set `extraArgs` for cluster URIs (e.g., `--uri="mongodb+srv://..."`).
+- For SCRAM auth, ensure `--authenticationDatabase` matches your setup (often `admin`).
+- Grant the backup user `read` on target DB; cluster-wide backups may require broader roles.
 
 #### Advanced Configuration with Slack Notifications
 
@@ -416,4 +464,4 @@ Below is an example of a minimal IAM policy for S3 access:
 }
 ```
 
-Replace `your-bucket-name` with the actual name of your S3 bucket. Granting only these permissions ensures the tool can perform all backup, restore, and cleanup operations securely. 
+Replace `your-bucket-name` with the actual name of your S3 bucket. Granting only these permissions ensures the tool can perform all backup, restore, and cleanup operations securely.

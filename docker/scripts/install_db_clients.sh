@@ -5,6 +5,7 @@ set -e
 # Based on environment variables:
 # - POSTGRES_VERSION: PostgreSQL client version (13, 14, 15, 16, 17)
 # - MYSQL_VERSION: MySQL/MariaDB client version (10.11, 11.4)
+# - MongoDB tools: installed without version pinning (mongodump, mongorestore)
 
 echo "Installing database clients based on environment variables..."
 echo "[DEBUG] DB_TYPE: $DB_TYPE"
@@ -14,6 +15,9 @@ case "$DB_TYPE" in
         ;;
     "mysql")
         echo "MYSQL_VERSION: ${MYSQL_VERSION:-10.11}"
+        ;;
+    "mongodb")
+        echo "MongoDB tools will be installed (mongodump/mongorestore)"
         ;;
 esac
 
@@ -57,6 +61,14 @@ install_mysql_client() {
     esac
 }
 
+# Function to install MongoDB database tools
+install_mongodb_tools() {
+    echo "Installing MongoDB database tools (mongodump, mongorestore)..."
+    # Alpine provides mongodb-tools package containing mongodump/mongorestore
+    apk add --no-cache mongodb-tools
+    echo "MongoDB tools installed successfully"
+}
+
 # Install clients based on database type
 case "$DB_TYPE" in
     "postgresql")
@@ -67,10 +79,13 @@ case "$DB_TYPE" in
         MYSQL_VERSION=${MYSQL_VERSION:-10.11}
         install_mysql_client "$MYSQL_VERSION"
         ;;
+    "mongodb")
+        install_mongodb_tools
+        ;;
     *)
-        echo "Error: DB_TYPE must be 'postgresql' or 'mysql', received: $DB_TYPE"
+        echo "Error: DB_TYPE must be 'postgresql', 'mysql' or 'mongodb', received: $DB_TYPE"
         exit 1
         ;;
 esac
 
-echo "Database client installation completed!" 
+echo "Database client installation completed!"

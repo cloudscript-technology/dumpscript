@@ -43,11 +43,13 @@ if [ "$DB_TYPE" = "postgresql" ]; then
   echo "[DEBUG] POSTGRES_VERSION: ${POSTGRES_VERSION:-16}"
 elif [ "$DB_TYPE" = "mysql" ]; then
   echo "[DEBUG] MYSQL_VERSION: ${MYSQL_VERSION:-10.11}"
+elif [ "$DB_TYPE" = "mongodb" ]; then
+  echo "[DEBUG] MongoDB tools will be installed"
 fi
 
 # Validate required variables
 if [ -z "$DB_TYPE" ]; then
-    error_msg="DB_TYPE must be specified (postgresql or mysql)"
+    error_msg="DB_TYPE must be specified (postgresql, mysql or mongodb)"
     echo "Error: $error_msg"
     notify_failure "$error_msg" "Configuration validation failed in entrypoint"
     exit 1
@@ -81,10 +83,19 @@ case "$DB_TYPE" in
         fi
         echo "MySQL client version: $(mysqldump --version)"
         ;;
+    "mongodb")
+        if ! command -v mongodump &> /dev/null; then
+            error_msg="mongodump not found after installation"
+            echo "Error: $error_msg"
+            notify_failure "$error_msg" "MongoDB tools installation failed"
+            exit 1
+        fi
+        echo "MongoDB tools version: $(mongodump --version | head -n 1)"
+        ;;
 esac
 
 echo "Database clients installed successfully!"
 echo "=== Starting Database Dump ==="
 
 # Execute the dump script
-exec /usr/local/bin/dump_db_to_s3.sh 
+exec /usr/local/bin/dump_db_to_s3.sh

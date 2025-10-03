@@ -3,7 +3,7 @@ set -e
 set -o pipefail
 
 # Wait for all variables to be set in the environment
-# DB_TYPE (mysql or postgresql), DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
+# DB_TYPE (mysql, postgresql or mongodb), DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
 # AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, AWS_ROLE_ARN, AWS_REGION, S3_BUCKET, S3_PREFIX, PERIODICITY
 # DUMP_OPTIONS (specific options for mysqldump or pg_dump)
 # SLACK_WEBHOOK_URL (optional) - URL do webhook do Slack para notificações
@@ -40,7 +40,7 @@ else
 fi
 
 if [ -z "$DB_TYPE" ]; then
-  error_msg="DB_TYPE must be specified (mysql or postgresql)"
+  error_msg="DB_TYPE must be specified (mysql, postgresql or mongodb)"
   echo "Error: $error_msg"
   notify_failure "$error_msg" "Configuration validation failed"
   exit 1
@@ -68,7 +68,23 @@ YEAR=$(date +%Y)
 MONTH=$(date +%m)
 DAY=$(date +%d)
 
-DUMP_FILE="dump_$(date +%Y%m%d_%H%M%S).sql"
+# Define dump filename based on DB_TYPE
+case "$DB_TYPE" in
+  "mysql"|"postgresql")
+    DUMP_EXT="sql"
+    ;;
+  "mongodb")
+    DUMP_EXT="archive"
+    ;;
+  *)
+    error_msg="DB_TYPE must be 'mysql', 'postgresql' or 'mongodb', received: $DB_TYPE"
+    echo "Error: $error_msg"
+    notify_failure "$error_msg" "Invalid database type configuration"
+    exit 1
+    ;;
+esac
+
+DUMP_FILE="dump_$(date +%Y%m%d_%H%M%S).${DUMP_EXT}"
 DUMP_FILE_GZ="$DUMP_FILE.gz"
 
 echo "[DEBUG] Dump file name: $DUMP_FILE"
@@ -112,8 +128,19 @@ case "$DB_TYPE" in
       exit 1
     fi
     ;;
+  "mongodb")
+    echo "Executing mongodump..."
+    # mongodump outputs to stdout when using --archive; --gzip compresses the output
+    if ! mongodump $DUMP_OPTIONS --host "$DB_HOST" --port "${DB_PORT:-27017}" --username "$DB_USER" --password "$DB_PASSWORD" --db "$DB_NAME" --archive --gzip > "$DUMP_FILE_GZ"; then
+      error_msg="mongodump execution failed"
+      echo "Error: $error_msg"
+      notify_failure "$error_msg" "MongoDB dump process failed - check database connectivity and credentials"
+      rm -f "$DUMP_FILE_GZ"
+      exit 1
+    fi
+    ;;
   *)
-    error_msg="DB_TYPE must be 'mysql' or 'postgresql', received: $DB_TYPE"
+    error_msg="DB_TYPE must be 'mysql', 'postgresql' or 'mongodb', received: $DB_TYPE"
     echo "Error: $error_msg"
     notify_failure "$error_msg" "Invalid database type configuration"
     exit 1

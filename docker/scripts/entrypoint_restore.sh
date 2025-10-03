@@ -8,11 +8,14 @@ echo "=== DumpScript Restore Container Starting ==="
 echo "DB_TYPE: $DB_TYPE"
 echo "POSTGRES_VERSION: ${POSTGRES_VERSION:-16}"
 echo "MYSQL_VERSION: ${MYSQL_VERSION:-10.11}"
+echo "MongoDB tools: will be installed when DB_TYPE=mongodb"
 echo "[DEBUG] DB_TYPE: $DB_TYPE"
 if [ "$DB_TYPE" = "postgresql" ]; then
   echo "[DEBUG] POSTGRES_VERSION: ${POSTGRES_VERSION:-16}"
 elif [ "$DB_TYPE" = "mysql" ]; then
   echo "[DEBUG] MYSQL_VERSION: ${MYSQL_VERSION:-10.11}"
+elif [ "$DB_TYPE" = "mongodb" ]; then
+  echo "[DEBUG] MongoDB tools will be installed"
 fi
 
 case "$DB_TYPE" in
@@ -22,11 +25,14 @@ case "$DB_TYPE" in
     "mysql")
         echo "MYSQL_VERSION: ${MYSQL_VERSION:-10.11}"
         ;;
+    "mongodb")
+        echo "MongoDB tools will be installed"
+        ;;
 esac
 
 # Validate required variables
 if [ -z "$DB_TYPE" ]; then
-    echo "Error: DB_TYPE must be specified (postgresql or mysql)"
+    echo "Error: DB_TYPE must be specified (postgresql, mysql or mongodb)"
     exit 1
 fi
 
@@ -50,10 +56,17 @@ case "$DB_TYPE" in
         fi
         echo "MySQL client version: $(mysql --version)"
         ;;
+    "mongodb")
+        if ! command -v mongorestore &> /dev/null; then
+            echo "Error: mongorestore not found after installation"
+            exit 1
+        fi
+        echo "MongoDB tools version: $(mongorestore --version | head -n 1)"
+        ;;
 esac
 
 echo "Database clients installed successfully!"
 echo "=== Starting Database Restore ==="
 
 # Execute the restore script
-exec /usr/local/bin/restore_db_from_s3.sh 
+exec /usr/local/bin/restore_db_from_s3.sh
