@@ -28,8 +28,36 @@ echo "[DEBUG] RETENTION_DAYS: $RETENTION_DAYS"
 echo "[DEBUG] BACKUP_PATH: $BACKUP_PATH"
 echo "[DEBUG] CUTOFF_DATE: $CUTOFF_DATE"
 
+# Determine effective AWS region and attempt role assumption if available
+AWS_EFFECTIVE_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
+echo "[DEBUG] AWS_REGION: ${AWS_REGION:-unset}"
+echo "[DEBUG] AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-unset}"
+echo "[DEBUG] Using AWS region: $AWS_EFFECTIVE_REGION"
+
+# Try to assume role using helper (no-fail)
+if [ -f "/usr/local/bin/aws_role_utils.sh" ]; then
+  . /usr/local/bin/aws_role_utils.sh
+  assume_aws_role || true
+fi
+
+# Optional: validate identity for troubleshooting
+if command -v aws >/dev/null 2>&1; then
+  aws sts get-caller-identity --region "$AWS_EFFECTIVE_REGION" >/dev/null 2>&1 || echo "[WARN] Unable to validate AWS identity (sts get-caller-identity)"
+fi
+
 # List, filter, and remove old backups
-if ! aws s3 ls "s3://${S3_BUCKET}/${BACKUP_PATH}" --recursive | while read -r line; do
+TMP_LIST=$(mktemp)
+TMP_ERR=$(mktemp)
+
+if ! aws s3 ls "s3://${S3_BUCKET}/${BACKUP_PATH}" --recursive --region "$AWS_EFFECTIVE_REGION" >"$TMP_LIST" 2>"$TMP_ERR"; then
+  echo "Warning: Failed to list backups at s3://${S3_BUCKET}/${BACKUP_PATH}"
+  echo "[DEBUG] aws s3 ls error output:"; sed -n '1,100p' "$TMP_ERR"
+  rm -f "$TMP_LIST" "$TMP_ERR"
+  echo "Skipping retention cleanup and continuing with dump."
+  exit 0
+fi
+
+while read -r line; do
     file_path=$(echo "$line" | awk '{print $4}')
     [ -z "$file_path" ] && continue
     # Only process files ending with .sql or .sql.gz
@@ -49,11 +77,10 @@ if ! aws s3 ls "s3://${S3_BUCKET}/${BACKUP_PATH}" --recursive | while read -r li
     if [[ "$backup_date" < "$CUTOFF_DATE" ]]; then
         echo "[DEBUG] $backup_date < $CUTOFF_DATE: will remove"
         echo "Removing s3://${S3_BUCKET}/${BACKUP_PATH}${file_path} (backup date: $backup_date)"
-        aws s3 rm "s3://${S3_BUCKET}/${file_path}"
+        aws s3 rm "s3://${S3_BUCKET}/${file_path}" --region "$AWS_EFFECTIVE_REGION"
     else
         echo "[DEBUG] $backup_date >= $CUTOFF_DATE: keeping"
     fi
-done; then
-  echo "Error: Failed to list backups at s3://${S3_BUCKET}/${BACKUP_PATH}"
-  exit 1
-fi
+done < "$TMP_LIST"
+
+rm -f "$TMP_LIST" "$TMP_ERR"
