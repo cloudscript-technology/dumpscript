@@ -131,7 +131,7 @@ case "$DB_TYPE" in
   "mongodb")
     echo "Executing mongodump..."
     # mongodump outputs to stdout when using --archive; --gzip compresses the output
-    if ! mongodump $DUMP_OPTIONS --host "$DB_HOST" --port "${DB_PORT:-27017}" --username "$DB_USER" --password "$DB_PASSWORD" --db "$DB_NAME" --archive --gzip > "$DUMP_FILE_GZ"; then
+    if ! mongodump $DUMP_OPTIONS --host "$DB_HOST" --port "${DB_PORT:-27017}" --username "$DB_USER" --password "$DB_PASSWORD" --archive --gzip > "$DUMP_FILE_GZ"; then
       error_msg="mongodump execution failed"
       echo "Error: $error_msg"
       notify_failure "$error_msg" "MongoDB dump process failed - check database connectivity and credentials"
