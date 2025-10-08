@@ -102,7 +102,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata
+      - name: Extract metadata for Alpine 3.21
         id: meta-alpine-3-21
         uses: docker/metadata-action@v5
         with:
@@ -112,7 +112,7 @@ jobs:
             type=raw,value=${{ needs.create-release.outputs.version }}-alpine-3-21
             type=raw,value=${{ needs.create-release.outputs.tag }}-alpine-3-21
 
-      - name: Extract metadata
+      - name: Extract metadata for Alpine 3.20
         id: meta-alpine-3-20
         uses: docker/metadata-action@v5
         with:
