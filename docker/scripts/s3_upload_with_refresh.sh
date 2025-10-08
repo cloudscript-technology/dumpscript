@@ -12,9 +12,9 @@ set -o pipefail
 MAX_RETRIES=3
 INITIAL_BACKOFF=5
 MAX_BACKOFF=300
-CREDENTIAL_REFRESH_INTERVAL=3300  # 55 minutos (tokens AWS duram 1 hora)
-MULTIPART_THRESHOLD=100000000     # 100MB
-MULTIPART_CHUNKSIZE=50000000      # 50MB por parte
+CREDENTIAL_REFRESH_INTERVAL=2700  # 45 minutos (tokens AWS duram 1 hora, refresh mais cedo)
+MULTIPART_THRESHOLD=1000000000    # 1GB - better for very large files
+MULTIPART_CHUNKSIZE=100000000     # 100MB por parte
 
 # Função para log com timestamp
 log_with_timestamp() {
@@ -118,7 +118,7 @@ validate_file() {
     
     local file_size=$(stat -c%s "$file_path")
     log_with_timestamp "Arquivo validado: $file_path (tamanho: $file_size bytes)"
-    echo $file_size
+    return 0
 }
 
 # Função para upload simples (arquivos pequenos)
@@ -160,12 +160,68 @@ simple_upload() {
     return 1
 }
 
-# Função para upload multipart (arquivos grandes)
+# Função para upload multipart com refresh automático de credenciais
+multipart_upload_with_refresh() {
+    local file_path="$1"
+    local s3_path="$2"
+    local refresh_function="$3"
+    
+    log_with_timestamp "Iniciando upload multipart com refresh automático de credenciais"
+    
+    # Configurar multipart upload
+    aws configure set default.s3.multipart_threshold $MULTIPART_THRESHOLD
+    aws configure set default.s3.multipart_chunksize $MULTIPART_CHUNKSIZE
+    aws configure set default.s3.max_concurrent_requests 2  # Reduzir para arquivos muito grandes
+    
+    # Iniciar refresh de credenciais em background
+    local refresh_pid=""
+    if [ -n "$refresh_function" ]; then
+        (
+            while true; do
+                sleep 2400  # Refresh a cada 40 minutos
+                log_with_timestamp "Background credential refresh iniciado"
+                if refresh_credentials "$refresh_function"; then
+                    log_with_timestamp "Background credential refresh concluído com sucesso"
+                else
+                    log_with_timestamp "Warning: Background credential refresh falhou"
+                fi
+            done
+        ) &
+        refresh_pid=$!
+        log_with_timestamp "Background credential refresh iniciado (PID: $refresh_pid)"
+    fi
+    
+    # Executar upload com timeout estendido
+    local upload_result=0
+    if ! timeout 21600 aws s3 cp "$file_path" "$s3_path" --storage-class STANDARD_IA; then
+        upload_result=1
+        log_with_timestamp "Upload multipart falhou"
+    else
+        log_with_timestamp "Upload multipart concluído com sucesso: $s3_path"
+    fi
+    
+    # Parar o processo de refresh em background
+    if [ -n "$refresh_pid" ]; then
+        kill $refresh_pid 2>/dev/null || true
+        log_with_timestamp "Background credential refresh parado"
+    fi
+    
+    return $upload_result
+}
+
+# Função para upload multipart (arquivos grandes) - versão com fallback
 multipart_upload() {
     local file_path="$1"
     local s3_path="$2"
     local refresh_function="$3"
     local attempt=1
+    
+    # Para arquivos muito grandes (>10GB), usar a versão com refresh automático
+    local file_size=$(stat -c%s "$file_path")
+    if [ $file_size -gt 10000000000 ]; then
+        log_with_timestamp "Arquivo muito grande detectado ($file_size bytes), usando upload com refresh automático"
+        return multipart_upload_with_refresh "$file_path" "$s3_path" "$refresh_function"
+    fi
     
     while [ $attempt -le $MAX_RETRIES ]; do
         log_with_timestamp "Tentativa $attempt de $MAX_RETRIES para upload multipart"
@@ -181,7 +237,8 @@ multipart_upload() {
            aws configure set default.s3.max_concurrent_requests 3; then
             
             # Tentar upload com callback para refresh de credenciais
-            if timeout 7200 aws s3 cp "$file_path" "$s3_path" --storage-class STANDARD_IA; then
+            # Para uploads muito grandes, usar timeout maior e refresh mais frequente
+            if timeout 14400 aws s3 cp "$file_path" "$s3_path" --storage-class STANDARD_IA; then
                 log_with_timestamp "Upload multipart concluído com sucesso: $s3_path"
                 return 0
             else
@@ -225,10 +282,11 @@ main() {
     log_with_timestamp "Função de refresh: ${refresh_function:-'não especificada'}"
     
     # Validar arquivo
-    local file_size
-    if ! file_size=$(validate_file "$file_path"); then
+    if ! validate_file "$file_path"; then
         exit 1
     fi
+    
+    local file_size=$(stat -c%s "$file_path")
     
     # Inicializar timestamp de última atualização de credenciais
     export LAST_CREDENTIAL_REFRESH=$(date +%s)
@@ -236,10 +294,16 @@ main() {
     # Decidir tipo de upload baseado no tamanho do arquivo
     if [ $file_size -gt $MULTIPART_THRESHOLD ]; then
         log_with_timestamp "Arquivo grande detectado ($file_size bytes), usando upload multipart"
-        multipart_upload "$file_path" "$s3_path" "$refresh_function"
+        if ! multipart_upload "$file_path" "$s3_path" "$refresh_function"; then
+            log_with_timestamp "Erro: Upload multipart falhou"
+            exit 1
+        fi
     else
         log_with_timestamp "Arquivo pequeno detectado ($file_size bytes), usando upload simples"
-        simple_upload "$file_path" "$s3_path" "$refresh_function"
+        if ! simple_upload "$file_path" "$s3_path" "$refresh_function"; then
+            log_with_timestamp "Erro: Upload simples falhou"
+            exit 1
+        fi
     fi
 }
 

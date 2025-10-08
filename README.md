@@ -23,6 +23,10 @@ Database dump and restore tool with configurable client versions.
 ### PostgreSQL
 Supported versions: `13`, `14`, `15`, `16`, `17`
 
+**Version Availability by Alpine Base Image:**
+- **Alpine 3.20**: PostgreSQL versions `14`, `15`, `16`
+- **Alpine 3.21**: PostgreSQL versions `15`, `16`, `17`
+
 The client version should match your PostgreSQL server version to avoid compatibility issues like:
 ```
 pg_dump: error: aborting because of server version mismatch

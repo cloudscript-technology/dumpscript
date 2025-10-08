@@ -59,7 +59,7 @@ send_failure_notification() {
             attachments: [
                 {
                     color: "danger",
-                    fallback: "Database Backup Failed: " + $error,
+                    fallback: ("Database Backup Failed: " + $error),
                     title: ":exclamation: Database Backup Failure",
                     fields: [
                         {title: "Error", value: $error, short: false},
