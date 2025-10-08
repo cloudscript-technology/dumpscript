@@ -2,11 +2,11 @@ name: Build and Push Docker Images
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
     paths-ignore:
-      - 'examples/**'
-      - 'README.md'
-      - 'LICENSE'
+      - "examples/**"
+      - "README.md"
+      - "LICENSE"
 
 env:
   REGISTRY: ghcr.io
@@ -20,62 +20,62 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
-    
+
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    - name: Calculate version
-      id: version
-      run: |
-        # Get the latest tag, or start with v0.0.0 if no tags exist
-        LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-        echo "Latest tag: $LATEST_TAG"
-        
-        # Remove 'v' prefix and split version
-        VERSION=${LATEST_TAG#v}
-        IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
-        
-        # Increment patch version
-        PATCH=$((PATCH + 1))
-        NEW_VERSION="$MAJOR.$MINOR.$PATCH"
-        NEW_TAG="v$NEW_VERSION"
-        
-        echo "New version: $NEW_VERSION"
-        echo "New tag: $NEW_TAG"
-        
-        echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
-        echo "tag=$NEW_TAG" >> $GITHUB_OUTPUT
+      - name: Calculate version
+        id: version
+        run: |
+          # Get the latest tag, or start with v0.0.0 if no tags exist
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "Latest tag: $LATEST_TAG"
 
-    - name: Create tag
-      run: |
-        git config --local user.email "jonathan.schmitt@cloudscript.com.br"
-        git config --local user.name "jonathanschmittcs"
-        git tag ${{ steps.version.outputs.tag }}
-        git push origin ${{ steps.version.outputs.tag }}
+          # Remove 'v' prefix and split version
+          VERSION=${LATEST_TAG#v}
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
 
-    - name: Generate changelog
-      id: changelog
-      run: |
-        # Get commits since last tag
-        LATEST_TAG=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || git rev-list --max-parents=0 HEAD)
-        
-        echo "## What's Changed" > changelog.md
-        echo "" >> changelog.md
-        
-        # Get commit messages since last tag
-        git log ${LATEST_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges >> changelog.md || echo "- Initial release" >> changelog.md
+          # Increment patch version
+          PATCH=$((PATCH + 1))
+          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+          NEW_TAG="v$NEW_VERSION"
 
-    - name: Create Release
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: ${{ steps.version.outputs.tag }}
-        name: Release ${{ steps.version.outputs.tag }}
-        body_path: changelog.md
-        draft: false
-        prerelease: false
+          echo "New version: $NEW_VERSION"
+          echo "New tag: $NEW_TAG"
+
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "tag=$NEW_TAG" >> $GITHUB_OUTPUT
+
+      - name: Create tag
+        run: |
+          git config --local user.email "jonathan.schmitt@cloudscript.com.br"
+          git config --local user.name "jonathanschmittcs"
+          git tag ${{ steps.version.outputs.tag }}
+          git push origin ${{ steps.version.outputs.tag }}
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # Get commits since last tag
+          LATEST_TAG=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || git rev-list --max-parents=0 HEAD)
+
+          echo "## What's Changed" > changelog.md
+          echo "" >> changelog.md
+
+          # Get commit messages since last tag
+          git log ${LATEST_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges >> changelog.md || echo "- Initial release" >> changelog.md
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Release ${{ steps.version.outputs.tag }}
+          body_path: changelog.md
+          draft: false
+          prerelease: false
 
   build-and-push:
     needs: create-release
@@ -87,47 +87,81 @@ jobs:
       attestations: write
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        ref: ${{ needs.create-release.outputs.tag }}
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.create-release.outputs.tag }}
 
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-    - name: Log in to Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Extract metadata
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-        tags: |
-          type=raw,value=latest
-          type=raw,value=${{ needs.create-release.outputs.version }}
-          type=raw,value=${{ needs.create-release.outputs.tag }}
+      - name: Extract metadata
+        id: meta-alpine-3-21
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=raw,value=${{ needs.create-release.outputs.version }}-alpine-3-21
+            type=raw,value=${{ needs.create-release.outputs.tag }}-alpine-3-21
 
-    - name: Build and push Docker image
-      id: build
-      uses: docker/build-push-action@v6
-      with:
-        context: ./docker
-        file: ./docker/Dockerfile.dump
-        platforms: linux/amd64,linux/arm64
-        push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+      - name: Extract metadata
+        id: meta-alpine-3-20
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=raw,value=${{ needs.create-release.outputs.version }}-alpine-3-20
+            type=raw,value=${{ needs.create-release.outputs.tag }}-alpine-3-20
 
-    - name: Generate artifact attestation
-      uses: actions/attest-build-provenance@v2
-      with:
-        subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-        subject-digest: ${{ steps.build.outputs.digest }}
-        push-to-registry: true 
+      - name: Build and push Docker image to Alpine 3.21
+        id: build_alpine_3_21
+        uses: docker/build-push-action@v6
+        with:
+          context: ./docker
+          file: ./docker/Dockerfile.dump
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            ALPINE_VERSION=3.21
+          tags: ${{ steps.meta-alpine-3-21.outputs.tags }}
+          labels: ${{ steps.meta-alpine-3-21.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push Docker image to Alpine 3.20
+        id: build_alpine_3_20
+        uses: docker/build-push-action@v6
+        with:
+          context: ./docker
+          file: ./docker/Dockerfile.dump
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            ALPINE_VERSION=3.20
+          tags: ${{ steps.meta-alpine-3-20.outputs.tags }}
+          labels: ${{ steps.meta-alpine-3-20.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Generate artifact attestation for Alpine 3.21
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build_alpine_3_21.outputs.digest }}
+          push-to-registry: true
+
+      - name: Generate artifact attestation for Alpine 3.20
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build_alpine_3_20.outputs.digest }}
+          push-to-registry: true
