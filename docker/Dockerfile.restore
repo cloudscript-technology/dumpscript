@@ -5,7 +5,7 @@ WORKDIR /dumpscript
 
 RUN addgroup -S cloudscript && adduser -S dumpscript -G cloudscript
 
-# Instalar dependências base e ferramentas necessárias
+# Install base dependencies and necessary tools
 RUN apk add --no-cache \
     aws-cli \
     jq \
@@ -15,7 +15,7 @@ RUN apk add --no-cache \
 
 ENV PATH="/usr/bin:${PATH}"
 
-# Adicionar labels para identificar a imagem
+# Add labels to identify the image
 LABEL org.opencontainers.image.title="dumpscript-restore" \
       org.opencontainers.image.description="Database restore tool with runtime configurable client versions"
 
@@ -25,13 +25,13 @@ COPY --chown=dumpscript:cloudscript ./scripts/install_db_clients.sh /usr/local/b
 COPY --chown=dumpscript:cloudscript ./scripts/entrypoint_restore.sh /usr/local/bin/entrypoint_restore.sh
 COPY --chown=dumpscript:cloudscript ./scripts/aws_role_utils.sh /usr/local/bin/aws_role_utils.sh
 
-# Dar permissões de execução
+# Grant execution permissions
 RUN chmod +x /usr/local/bin/restore_db_from_s3.sh \
     && chmod +x /usr/local/bin/install_db_clients.sh \
     && chmod +x /usr/local/bin/entrypoint_restore.sh \
     && chmod +x /usr/local/bin/aws_role_utils.sh
 
-# Garantir que o diretório /dumpscript tenha as permissões corretas
+# Ensure the /dumpscript directory has correct permissions
 RUN chown -R dumpscript:cloudscript /dumpscript
 
 USER dumpscript

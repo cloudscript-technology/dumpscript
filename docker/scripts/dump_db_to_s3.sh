@@ -6,12 +6,12 @@ set -o pipefail
 # DB_TYPE (mysql, postgresql or mongodb), DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
 # AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, AWS_ROLE_ARN, AWS_REGION, S3_BUCKET, S3_PREFIX, PERIODICITY
 # DUMP_OPTIONS (specific options for mysqldump or pg_dump)
-# SLACK_WEBHOOK_URL (optional) - URL do webhook do Slack para notificações
-# SLACK_CHANNEL (optional) - Canal específico para enviar mensagens
-# SLACK_USERNAME (optional) - Nome do usuário que aparecerá como remetente
-# SLACK_NOTIFY_SUCCESS (optional) - Se "true", envia notificações de sucesso também
+# SLACK_WEBHOOK_URL (optional) - Slack webhook URL for notifications
+# SLACK_CHANNEL (optional) - Specific channel to send messages
+# SLACK_USERNAME (optional) - Username that will appear as sender
+# SLACK_NOTIFY_SUCCESS (optional) - If "true", also sends success notifications
 
-# Função para notificar falhas no Slack
+# Function to notify failures in Slack
 notify_failure() {
     local error_msg="$1"
     local context="$2"
@@ -21,7 +21,7 @@ notify_failure() {
     fi
 }
 
-# Função para notificar sucesso no Slack
+# Function to notify success in Slack
 notify_success() {
     local s3_path="$1"
     local dump_size="$2"
@@ -214,7 +214,7 @@ if [ ! -f "/usr/local/bin/s3_upload_with_refresh.sh" ]; then
   exit 1
 fi
 
-# Usar o sistema robusto de upload com refresh automático
+# Use robust upload system with automatic refresh
 if ! /usr/local/bin/s3_upload_with_refresh.sh "$DUMP_FILE_GZ" "$S3_PATH" "assume_aws_role"; then
   error_msg="Failed to upload to S3 after multiple attempts with credential refresh"
   echo "Error: $error_msg"
@@ -229,5 +229,5 @@ rm "$DUMP_FILE_GZ"
 
 echo "Dump completed successfully: $S3_PATH"
 
-# Enviar notificação de sucesso se configurado
+# Send success notification if configured
 notify_success "$S3_PATH" "$DUMP_SIZE"

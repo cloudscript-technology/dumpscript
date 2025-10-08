@@ -3,7 +3,7 @@
 # AWS Role Utilities - Shared functions for AWS role assumption
 # This script contains reusable functions for AWS authentication
 
-# Função para assumir role AWS (reutilizável)
+# Function to assume AWS role (reusable)
 assume_aws_role() {
     if [ -z "$AWS_ROLE_ARN" ]; then
         echo "No AWS_ROLE_ARN defined, skipping role assumption"

@@ -4,7 +4,7 @@ set -e
 # Entrypoint for the dump container
 # Installs necessary clients dynamically and executes the dump
 
-# Função para notificar falhas no Slack
+# Function to notify failures in Slack
 notify_failure() {
     local error_msg="$1"
     local context="$2"
@@ -14,7 +14,7 @@ notify_failure() {
     fi
 }
 
-# Trap para capturar falhas não tratadas
+# Trap to capture unhandled failures
 cleanup_on_failure() {
     local exit_code=$?
     if [ $exit_code -ne 0 ] && [ "$NOTIFICATION_SENT" != "true" ]; then

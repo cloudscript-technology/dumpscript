@@ -3,7 +3,7 @@ FROM alpine:$ALPINE_VERSION
 
 WORKDIR /dumpscript
 
-# Instalar dependências base e ferramentas necessárias
+# Install base dependencies and necessary tools
 RUN apk add --no-cache \
     aws-cli \
     jq \
@@ -14,7 +14,7 @@ RUN apk add --no-cache \
 
 ENV PATH="/usr/bin:${PATH}"
 
-# Adicionar labels para identificar a imagem
+# Add labels to identify the image
 LABEL org.opencontainers.image.title="dumpscript" \
       org.opencontainers.image.description="Database dump tool with runtime configurable client versions"
 
@@ -27,7 +27,7 @@ COPY ./scripts/notify_slack.sh /usr/local/bin/notify_slack.sh
 COPY ./scripts/s3_upload_with_refresh.sh /usr/local/bin/s3_upload_with_refresh.sh
 COPY ./scripts/aws_role_utils.sh /usr/local/bin/aws_role_utils.sh
 
-# Dar permissões de execução
+# Grant execution permissions
 RUN chmod +x /usr/local/bin/dump_db_to_s3.sh \
     && chmod +x /usr/local/bin/install_db_clients.sh \
     && chmod +x /usr/local/bin/remove_old_backups.sh \
@@ -36,10 +36,10 @@ RUN chmod +x /usr/local/bin/dump_db_to_s3.sh \
     && chmod +x /usr/local/bin/s3_upload_with_refresh.sh \
     && chmod +x /usr/local/bin/aws_role_utils.sh
 
-# Espera que todas as variáveis estejam setadas no ambiente
-# DB_TYPE (mysql ou postgresql), DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
+# Expects all variables to be set in the environment
+# DB_TYPE (mysql or postgresql), DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
 # AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, AWS_ROLE_ARN, AWS_REGION, S3_BUCKET, S3_PREFIX, PERIODICITY
-# DUMP_OPTIONS (opções específicas para mysqldump ou pg_dump)
-# SLACK_WEBHOOK_URL (opcional), SLACK_CHANNEL (opcional), SLACK_USERNAME (opcional), SLACK_NOTIFY_SUCCESS (opcional)
+# DUMP_OPTIONS (specific options for mysqldump or pg_dump)
+# SLACK_WEBHOOK_URL (optional), SLACK_CHANNEL (optional), SLACK_USERNAME (optional), SLACK_NOTIFY_SUCCESS (optional)
 
 ENTRYPOINT ["/usr/local/bin/entrypoint_dump.sh"]

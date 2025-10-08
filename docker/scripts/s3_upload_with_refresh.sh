@@ -2,13 +2,13 @@
 set -e
 set -o pipefail
 
-# Script para upload S3 com refresh automático de credenciais
-# Parâmetros:
-# $1 - arquivo local para upload
-# $2 - caminho S3 de destino
-# $3 - função de refresh de credenciais (opcional)
+# Script for S3 upload with automatic credential refresh
+# Parameters:
+# $1 - local file for upload
+# $2 - S3 destination path
+# $3 - credential refresh function (optional)
 
-# Configurações
+# Configuration
 MAX_RETRIES=3
 INITIAL_BACKOFF=5
 MAX_BACKOFF=300
@@ -16,12 +16,12 @@ CREDENTIAL_REFRESH_INTERVAL=2700  # 45 minutos (tokens AWS duram 1 hora, refresh
 MULTIPART_THRESHOLD=1000000000    # 1GB - better for very large files
 MULTIPART_CHUNKSIZE=100000000     # 100MB por parte
 
-# Função para log com timestamp
+# Function for logging with timestamp
 log_with_timestamp() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
 
-# Função para calcular backoff exponencial
+# Function to calculate exponential backoff
 calculate_backoff() {
     local attempt=$1
     local backoff=$((INITIAL_BACKOFF * (2 ** (attempt - 1))))
@@ -31,21 +31,21 @@ calculate_backoff() {
     echo $backoff
 }
 
-# Função para verificar se as credenciais estão próximas do vencimento
+# Function to check if credentials are close to expiration
 check_credential_expiry() {
     if [ -n "$AWS_SESSION_TOKEN" ]; then
-        # Para tokens temporários, verificamos se estão próximos do vencimento
-        # Como não temos acesso direto ao tempo de expiração, usamos um intervalo fixo
+        # For temporary tokens, we check if they are close to expiration
+        # Since we don't have direct access to expiration time, we use a fixed interval
         local current_time=$(date +%s)
         local last_refresh_time=${LAST_CREDENTIAL_REFRESH:-0}
         local time_since_refresh=$((current_time - last_refresh_time))
         
         if [ $time_since_refresh -gt $CREDENTIAL_REFRESH_INTERVAL ]; then
-            log_with_timestamp "Credenciais próximas do vencimento, refreshing..."
-            return 0  # Precisa refresh
+            log_with_timestamp "Credentials close to expiration, refreshing..."
+            return 0  # Needs refresh
         fi
     fi
-    return 1  # Não precisa refresh
+    return 1  # No refresh needed
 }
 
 # Source AWS utilities if available
@@ -55,7 +55,7 @@ elif [ -f "$(dirname "$0")/aws_role_utils.sh" ]; then
     . "$(dirname "$0")/aws_role_utils.sh"
 fi
 
-# Função para refresh de credenciais
+# Function for credential refresh
 refresh_credentials() {
     local refresh_function="$1"
     
@@ -64,64 +64,64 @@ refresh_credentials() {
         case "$refresh_function" in
             "assume_aws_role")
                 if command -v assume_aws_role >/dev/null 2>&1; then
-                    log_with_timestamp "Executando refresh de credenciais usando: $refresh_function"
+                    log_with_timestamp "Executing credential refresh using: $refresh_function"
                     if assume_aws_role; then
                         export LAST_CREDENTIAL_REFRESH=$(date +%s)
-                        log_with_timestamp "Credenciais refreshed com sucesso"
+                        log_with_timestamp "Credentials refreshed successfully"
                         return 0
                     else
-                        log_with_timestamp "Erro ao fazer refresh das credenciais"
+                        log_with_timestamp "Error refreshing credentials"
                         return 1
                     fi
                 else
-                    log_with_timestamp "Função assume_aws_role não disponível - AWS utilities não carregadas"
+                    log_with_timestamp "Function assume_aws_role not available - AWS utilities not loaded"
                     return 1
                 fi
                 ;;
             *)
                 # Try to call the function if it exists
                 if command -v "$refresh_function" >/dev/null 2>&1; then
-                    log_with_timestamp "Executando refresh de credenciais usando: $refresh_function"
+                    log_with_timestamp "Executing credential refresh using: $refresh_function"
                     if "$refresh_function"; then
                         export LAST_CREDENTIAL_REFRESH=$(date +%s)
-                        log_with_timestamp "Credenciais refreshed com sucesso"
+                        log_with_timestamp "Credentials refreshed successfully"
                         return 0
                     else
-                        log_with_timestamp "Erro ao fazer refresh das credenciais"
+                        log_with_timestamp "Error refreshing credentials"
                         return 1
                     fi
                 else
-                    log_with_timestamp "Função de refresh não disponível ou não encontrada: $refresh_function"
+                    log_with_timestamp "Refresh function not available or not found: $refresh_function"
                     return 1
                 fi
                 ;;
         esac
     else
-        log_with_timestamp "Nenhuma função de refresh especificada"
+        log_with_timestamp "No refresh function specified"
         return 1
     fi
 }
 
-# Função para verificar se o arquivo existe e obter informações
+# Function to check if file exists and get information
 validate_file() {
     local file_path="$1"
     
     if [ ! -f "$file_path" ]; then
-        log_with_timestamp "Erro: Arquivo não encontrado: $file_path"
+        log_with_timestamp "Error: File not found: $file_path"
         return 1
     fi
     
     if [ ! -s "$file_path" ]; then
-        log_with_timestamp "Erro: Arquivo está vazio: $file_path"
+        log_with_timestamp "Error: File is empty: $file_path"
         return 1
     fi
     
     local file_size=$(stat -c%s "$file_path")
-    log_with_timestamp "Arquivo validado: $file_path (tamanho: $file_size bytes)"
+    log_with_timestamp "File validated: $file_path (size: $file_size bytes)"
     return 0
 }
 
-# Função para upload simples (arquivos pequenos)
+# Function for simple upload (small files)
 simple_upload() {
     local file_path="$1"
     local s3_path="$2"
@@ -129,185 +129,185 @@ simple_upload() {
     local attempt=1
     
     while [ $attempt -le $MAX_RETRIES ]; do
-        log_with_timestamp "Tentativa $attempt de $MAX_RETRIES para upload simples"
+        log_with_timestamp "Attempt $attempt of $MAX_RETRIES for simple upload"
         
         # Verificar se precisa refresh de credenciais
         if check_credential_expiry; then
-            refresh_credentials "$refresh_function" || log_with_timestamp "Warning: Falha no refresh de credenciais"
+            refresh_credentials "$refresh_function" || log_with_timestamp "Warning: Failed to refresh credentials"
         fi
         
         # Tentar upload
         if aws s3 cp "$file_path" "$s3_path" --no-progress; then
-            log_with_timestamp "Upload simples concluído com sucesso: $s3_path"
+            log_with_timestamp "Simple upload completed successfully: $s3_path"
             return 0
         else
-            log_with_timestamp "Falha no upload simples (tentativa $attempt)"
+            log_with_timestamp "Simple upload failed (attempt $attempt)"
             
             if [ $attempt -lt $MAX_RETRIES ]; then
                 local backoff=$(calculate_backoff $attempt)
-                log_with_timestamp "Aguardando $backoff segundos antes da próxima tentativa..."
+                log_with_timestamp "Waiting $backoff seconds before next attempt..."
                 sleep $backoff
                 
-                # Tentar refresh de credenciais antes da próxima tentativa
-                refresh_credentials "$refresh_function" || log_with_timestamp "Warning: Falha no refresh de credenciais"
+                # Try credential refresh before next attempt
+                refresh_credentials "$refresh_function" || log_with_timestamp "Warning: Failed to refresh credentials"
             fi
         fi
         
         attempt=$((attempt + 1))
     done
     
-    log_with_timestamp "Erro: Upload simples falhou após $MAX_RETRIES tentativas"
+    log_with_timestamp "Error: Simple upload failed after $MAX_RETRIES attempts"
     return 1
 }
 
-# Função para upload multipart com refresh automático de credenciais
+# Function for multipart upload with automatic credential refresh
 multipart_upload_with_refresh() {
     local file_path="$1"
     local s3_path="$2"
     local refresh_function="$3"
     
-    log_with_timestamp "Iniciando upload multipart com refresh automático de credenciais"
+    log_with_timestamp "Starting multipart upload with automatic credential refresh"
     
     # Configurar multipart upload
     aws configure set default.s3.multipart_threshold $MULTIPART_THRESHOLD
     aws configure set default.s3.multipart_chunksize $MULTIPART_CHUNKSIZE
-    aws configure set default.s3.max_concurrent_requests 2  # Reduzir para arquivos muito grandes
+    aws configure set default.s3.max_concurrent_requests 2  # Reduce for very large files
     
-    # Iniciar refresh de credenciais em background
+    # Start background credential refresh
     local refresh_pid=""
     if [ -n "$refresh_function" ]; then
         (
             while true; do
-                sleep 2400  # Refresh a cada 40 minutos
-                log_with_timestamp "Background credential refresh iniciado"
+                sleep 2400  # Refresh every 40 minutes
+                log_with_timestamp "Background credential refresh started"
                 if refresh_credentials "$refresh_function"; then
-                    log_with_timestamp "Background credential refresh concluído com sucesso"
+                    log_with_timestamp "Background credential refresh completed successfully"
                 else
-                    log_with_timestamp "Warning: Background credential refresh falhou"
+                    log_with_timestamp "Warning: Background credential refresh failed"
                 fi
             done
         ) &
         refresh_pid=$!
-        log_with_timestamp "Background credential refresh iniciado (PID: $refresh_pid)"
+        log_with_timestamp "Background credential refresh started (PID: $refresh_pid)"
     fi
     
-    # Executar upload com timeout estendido
+    # Execute upload with extended timeout
     local upload_result=0
     if ! timeout 21600 aws s3 cp "$file_path" "$s3_path" --storage-class STANDARD_IA; then
         upload_result=1
-        log_with_timestamp "Upload multipart falhou"
+        log_with_timestamp "Multipart upload failed"
     else
-        log_with_timestamp "Upload multipart concluído com sucesso: $s3_path"
+        log_with_timestamp "Multipart upload completed successfully: $s3_path"
     fi
     
-    # Parar o processo de refresh em background
+    # Stop background refresh process
     if [ -n "$refresh_pid" ]; then
         kill $refresh_pid 2>/dev/null || true
-        log_with_timestamp "Background credential refresh parado"
+        log_with_timestamp "Background credential refresh stopped"
     fi
     
     return $upload_result
 }
 
-# Função para upload multipart (arquivos grandes) - versão com fallback
+# Function for multipart upload (large files) - version with fallback
 multipart_upload() {
     local file_path="$1"
     local s3_path="$2"
     local refresh_function="$3"
     local attempt=1
     
-    # Para arquivos muito grandes (>10GB), usar a versão com refresh automático
+    # For very large files (>10GB), use version with automatic refresh
     local file_size=$(stat -c%s "$file_path")
     if [ $file_size -gt 10000000000 ]; then
-        log_with_timestamp "Arquivo muito grande detectado ($file_size bytes), usando upload com refresh automático"
+        log_with_timestamp "Very large file detected ($file_size bytes), using multipart upload with automatic refresh"
         return multipart_upload_with_refresh "$file_path" "$s3_path" "$refresh_function"
     fi
     
     while [ $attempt -le $MAX_RETRIES ]; do
-        log_with_timestamp "Tentativa $attempt de $MAX_RETRIES para upload multipart"
+        log_with_timestamp "Attempt $attempt of $MAX_RETRIES for multipart upload"
         
         # Verificar se precisa refresh de credenciais
         if check_credential_expiry; then
-            refresh_credentials "$refresh_function" || log_with_timestamp "Warning: Falha no refresh de credenciais"
+            refresh_credentials "$refresh_function" || log_with_timestamp "Warning: Failed to refresh credentials"
         fi
         
-        # Configurar multipart upload com monitoramento de progresso
+        # Configure multipart upload with progress monitoring
         if aws configure set default.s3.multipart_threshold $MULTIPART_THRESHOLD && \
            aws configure set default.s3.multipart_chunksize $MULTIPART_CHUNKSIZE && \
            aws configure set default.s3.max_concurrent_requests 3; then
             
-            # Tentar upload com callback para refresh de credenciais
-            # Para uploads muito grandes, usar timeout maior e refresh mais frequente
+            # Try upload with callback for credential refresh
+            # For very large uploads, use longer timeout and more frequent refresh
             if timeout 14400 aws s3 cp "$file_path" "$s3_path" --storage-class STANDARD_IA; then
-                log_with_timestamp "Upload multipart concluído com sucesso: $s3_path"
+                log_with_timestamp "Multipart upload completed successfully: $s3_path"
                 return 0
             else
-                log_with_timestamp "Falha no upload multipart (tentativa $attempt)"
+                log_with_timestamp "Multipart upload failed (attempt $attempt)"
             fi
         else
-            log_with_timestamp "Erro ao configurar parâmetros de multipart upload"
+            log_with_timestamp "Error configuring multipart upload parameters"
         fi
         
         if [ $attempt -lt $MAX_RETRIES ]; then
             local backoff=$(calculate_backoff $attempt)
-            log_with_timestamp "Aguardando $backoff segundos antes da próxima tentativa..."
+            log_with_timestamp "Waiting $backoff seconds before next attempt..."
             sleep $backoff
             
-            # Tentar refresh de credenciais antes da próxima tentativa
-            refresh_credentials "$refresh_function" || log_with_timestamp "Warning: Falha no refresh de credenciais"
+            # Try credential refresh before next attempt
+            refresh_credentials "$refresh_function" || log_with_timestamp "Warning: Failed to refresh credentials"
         fi
         
         attempt=$((attempt + 1))
     done
     
-    log_with_timestamp "Erro: Upload multipart falhou após $MAX_RETRIES tentativas"
+    log_with_timestamp "Error: Multipart upload failed after $MAX_RETRIES attempts"
     return 1
 }
 
-# Função principal
+# Main function
 main() {
     local file_path="$1"
     local s3_path="$2"
     local refresh_function="$3"
     
     if [ -z "$file_path" ] || [ -z "$s3_path" ]; then
-        echo "Uso: $0 <arquivo_local> <caminho_s3> [função_refresh]"
+        echo "Usage: $0 <local_file> <s3_path> [refresh_function]"
         echo "Exemplo: $0 /tmp/dump.sql.gz s3://bucket/path/dump.sql.gz assume_aws_role"
         exit 1
     fi
     
-    log_with_timestamp "Iniciando upload S3 com refresh automático de credenciais"
-    log_with_timestamp "Arquivo: $file_path"
+    log_with_timestamp "Starting S3 upload with automatic credential refresh"
+    log_with_timestamp "File: $file_path"
     log_with_timestamp "Destino: $s3_path"
-    log_with_timestamp "Função de refresh: ${refresh_function:-'não especificada'}"
+    log_with_timestamp "Refresh function: ${refresh_function:-'not specified'}"
     
-    # Validar arquivo
+    # Validate file
     if ! validate_file "$file_path"; then
         exit 1
     fi
     
     local file_size=$(stat -c%s "$file_path")
     
-    # Inicializar timestamp de última atualização de credenciais
+    # Initialize timestamp of last credential update
     export LAST_CREDENTIAL_REFRESH=$(date +%s)
     
-    # Decidir tipo de upload baseado no tamanho do arquivo
+    # Decide upload type based on file size
     if [ $file_size -gt $MULTIPART_THRESHOLD ]; then
-        log_with_timestamp "Arquivo grande detectado ($file_size bytes), usando upload multipart"
+        log_with_timestamp "Large file detected ($file_size bytes), using multipart upload"
         if ! multipart_upload "$file_path" "$s3_path" "$refresh_function"; then
-            log_with_timestamp "Erro: Upload multipart falhou"
+            log_with_timestamp "Error: Multipart upload failed"
             exit 1
         fi
     else
-        log_with_timestamp "Arquivo pequeno detectado ($file_size bytes), usando upload simples"
+        log_with_timestamp "Small file detected ($file_size bytes), using simple upload"
         if ! simple_upload "$file_path" "$s3_path" "$refresh_function"; then
-            log_with_timestamp "Erro: Upload simples falhou"
+            log_with_timestamp "Error: Simple upload failed"
             exit 1
         fi
     fi
 }
 
-# Executar função principal se o script for chamado diretamente
+# Execute main function if script is called directly
 if [ "${0##*/}" = "s3_upload_with_refresh.sh" ]; then
     main "$@"
 fi

@@ -1,11 +1,11 @@
 #!/bin/sh
 set -e
 
-# Script para enviar notificações para o Slack via webhook
-# Requer as seguintes variáveis de ambiente:
-# SLACK_WEBHOOK_URL - URL do webhook do Slack
-# SLACK_CHANNEL (opcional) - Canal específico para enviar a mensagem
-# SLACK_USERNAME (opcional) - Nome do usuário que aparecerá como remetente
+# Script to send notifications to Slack via webhook
+# Requires the following environment variables:
+# SLACK_WEBHOOK_URL - Slack webhook URL
+# SLACK_CHANNEL (optional) - Specific channel to send the message
+# SLACK_USERNAME (optional) - Username that will appear as sender
 
 # Append helper for environment info blocks
 append_env_info() {
@@ -20,7 +20,7 @@ append_env_info() {
     fi
 }
 
-# Função para enviar notificação de falha
+# Function to send failure notification
 send_failure_notification() {
     local error_message="$1"
     local context="$2"
@@ -33,7 +33,7 @@ send_failure_notification() {
         return 0
     fi
     
-    # Preparar dados do contexto
+    # Prepare context data
     local env_info=""
     append_env_info "Database Type" "$DB_TYPE"
     append_env_info "Database Host" "$DB_HOST"
@@ -77,7 +77,7 @@ send_failure_notification() {
     
     echo "Sending Slack notification..."
     
-    # Enviar para o Slack
+    # Send to Slack
     if curl -s -X POST \
         -H 'Content-type: application/json' \
         --data "$payload" \
@@ -89,7 +89,7 @@ send_failure_notification() {
     fi
 }
 
-# Função para enviar notificação de sucesso (opcional)
+# Function to send success notification (optional)
 send_success_notification() {
     local s3_path="$1"
     local dump_size="$2"
@@ -102,12 +102,12 @@ send_success_notification() {
         return 0
     fi
     
-    # Só enviar notificação de sucesso se SLACK_NOTIFY_SUCCESS estiver habilitado
+    # Only send success notification if SLACK_NOTIFY_SUCCESS is enabled
     if [ "$SLACK_NOTIFY_SUCCESS" != "true" ]; then
         return 0
     fi
     
-    # Preparar dados do contexto
+    # Prepare context data
     local env_info=""
     append_env_info "Database Type" "$DB_TYPE"
     append_env_info "Database Host" "$DB_HOST"
@@ -150,7 +150,7 @@ send_success_notification() {
     
     echo "Sending Slack success notification..."
     
-    # Enviar para o Slack
+    # Send to Slack
     if curl -s -X POST \
         -H 'Content-type: application/json' \
         --data "$payload" \
@@ -162,7 +162,7 @@ send_success_notification() {
     fi
 }
 
-# Permitir que o script seja usado como função ou executado diretamente
+# Allow the script to be used as a function or executed directly
 case "$1" in
     "failure")
         send_failure_notification "$2" "$3"
