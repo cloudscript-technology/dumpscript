@@ -220,7 +220,8 @@ multipart_upload() {
     local file_size=$(stat -c%s "$file_path")
     if [ $file_size -gt 10000000000 ]; then
         log_with_timestamp "Very large file detected ($file_size bytes), using multipart upload with automatic refresh"
-        return multipart_upload_with_refresh "$file_path" "$s3_path" "$refresh_function"
+        multipart_upload_with_refresh "$file_path" "$s3_path" "$refresh_function"
+        return $?
     fi
     
     while [ $attempt -le $MAX_RETRIES ]; do
