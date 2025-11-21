@@ -137,7 +137,11 @@ simple_upload() {
         fi
         
         # Tentar upload
-        if aws s3 cp "$file_path" "$s3_path" --no-progress; then
+        AWS_S3_ARGS=""
+        if [ -n "$AWS_S3_ENDPOINT_URL" ]; then
+            AWS_S3_ARGS="--endpoint-url $AWS_S3_ENDPOINT_URL"
+        fi
+        if aws s3 cp "$file_path" "$s3_path" --no-progress $AWS_S3_ARGS; then
             log_with_timestamp "Simple upload completed successfully: $s3_path"
             return 0
         else
@@ -193,7 +197,11 @@ multipart_upload_with_refresh() {
     
     # Execute upload with extended timeout
     local upload_result=0
-    if ! timeout 21600 aws s3 cp "$file_path" "$s3_path" --storage-class STANDARD_IA; then
+    AWS_S3_ARGS=""
+    if [ -n "$AWS_S3_ENDPOINT_URL" ]; then
+        AWS_S3_ARGS="--endpoint-url $AWS_S3_ENDPOINT_URL"
+    fi
+    if ! timeout 21600 aws s3 cp "$file_path" "$s3_path" --storage-class STANDARD_IA $AWS_S3_ARGS; then
         upload_result=1
         log_with_timestamp "Multipart upload failed"
     else
@@ -239,7 +247,11 @@ multipart_upload() {
             
             # Try upload with callback for credential refresh
             # For very large uploads, use longer timeout and more frequent refresh
-            if timeout 14400 aws s3 cp "$file_path" "$s3_path" --storage-class STANDARD_IA; then
+            AWS_S3_ARGS=""
+            if [ -n "$AWS_S3_ENDPOINT_URL" ]; then
+                AWS_S3_ARGS="--endpoint-url $AWS_S3_ENDPOINT_URL"
+            fi
+            if timeout 14400 aws s3 cp "$file_path" "$s3_path" --storage-class STANDARD_IA $AWS_S3_ARGS; then
                 log_with_timestamp "Multipart upload completed successfully: $s3_path"
                 return 0
             else
@@ -279,7 +291,7 @@ main() {
     
     log_with_timestamp "Starting S3 upload with automatic credential refresh"
     log_with_timestamp "File: $file_path"
-    log_with_timestamp "Destino: $s3_path"
+    log_with_timestamp "Destination: $s3_path"
     log_with_timestamp "Refresh function: ${refresh_function:-'not specified'}"
     
     # Validate file

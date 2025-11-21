@@ -4,7 +4,8 @@ set -e
 # Script to install database clients dynamically
 # Based on environment variables:
 # - POSTGRES_VERSION: PostgreSQL client version (13, 14, 15, 16, 17)
-# - MYSQL_VERSION: MySQL/MariaDB client version (10.11, 11.4)
+# - MYSQL_VERSION: MySQL client version (8.0)
+# - MARIADB_VERSION: MariaDB client version (10.11, 11.4)
 # - MongoDB tools: installed without version pinning (mongodump, mongorestore)
 
 echo "Installing database clients based on environment variables..."
@@ -14,7 +15,10 @@ case "$DB_TYPE" in
         echo "POSTGRES_VERSION: ${POSTGRES_VERSION:-16}"
         ;;
     "mysql")
-        echo "MYSQL_VERSION: ${MYSQL_VERSION:-10.11}"
+        echo "MYSQL_VERSION: ${MYSQL_VERSION:-8.0}"
+        ;;
+    "mariadb")
+        echo "MARIADB_VERSION: ${MARIADB_VERSION:-11.4}"
         ;;
     "mongodb")
         echo "MongoDB tools will be installed (mongodump/mongorestore)"
@@ -53,9 +57,38 @@ install_mysql_client() {
             apk add --no-cache mysql-client
             echo "MySQL client installed successfully"
             ;;
+        "5.7")
+            if apk add --no-cache mysql-client~=${version} >/dev/null 2>&1; then
+                echo "MySQL client $version installed successfully"
+            else
+                echo "MySQL 5.7 client not available; installing compatible MariaDB client"
+                apk add --no-cache mariadb-client~="10.11"
+                if ! command -v mysqldump >/dev/null 2>&1 && command -v mariadb-dump >/dev/null 2>&1; then
+                    ln -sf "$(command -v mariadb-dump)" /usr/bin/mysqldump
+                fi
+                echo "Fallback to MariaDB client completed"
+            fi
+            ;;
         *)
             echo "Error: Unsupported MySQL/MariaDB version: $version"
-            echo "Supported versions: 10.11, 11.4, 8.0"
+            echo "Supported versions: 10.11, 11.4, 8.0, 5.7"
+            exit 1
+            ;;
+    esac
+}
+
+# Function to install MariaDB client
+install_mariadb_client() {
+    local version=$1
+    echo "Installing MariaDB client version $version..."
+    case "$version" in
+        "10.11"|"11.4")
+            apk add --no-cache mariadb-client~=${version}
+            echo "MariaDB client $version installed successfully"
+            ;;
+        *)
+            echo "Error: Unsupported MariaDB version: $version"
+            echo "Supported versions: 10.11, 11.4"
             exit 1
             ;;
     esac
@@ -76,14 +109,18 @@ case "$DB_TYPE" in
         install_postgresql_client "$POSTGRES_VERSION"
         ;;
     "mysql")
-        MYSQL_VERSION=${MYSQL_VERSION:-10.11}
+        MYSQL_VERSION=${MYSQL_VERSION:-8.0}
         install_mysql_client "$MYSQL_VERSION"
+        ;;
+    "mariadb")
+        MARIADB_VERSION=${MARIADB_VERSION:-11.4}
+        install_mariadb_client "$MARIADB_VERSION"
         ;;
     "mongodb")
         install_mongodb_tools
         ;;
     *)
-        echo "Error: DB_TYPE must be 'postgresql', 'mysql' or 'mongodb', received: $DB_TYPE"
+        echo "Error: DB_TYPE must be 'postgresql', 'mysql', 'mariadb' or 'mongodb', received: $DB_TYPE"
         exit 1
         ;;
 esac

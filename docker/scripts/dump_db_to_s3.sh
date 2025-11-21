@@ -3,9 +3,9 @@ set -e
 set -o pipefail
 
 # Wait for all variables to be set in the environment
-# DB_TYPE (mysql, postgresql or mongodb), DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
+# DB_TYPE (mysql, mariadb, postgresql or mongodb), DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
 # AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, AWS_ROLE_ARN, AWS_REGION, S3_BUCKET, S3_PREFIX, PERIODICITY
-# DUMP_OPTIONS (specific options for mysqldump or pg_dump)
+# DUMP_OPTIONS (specific options for mysqldump, mariadb-dump or pg_dump)
 # SLACK_WEBHOOK_URL (optional) - Slack webhook URL for notifications
 # SLACK_CHANNEL (optional) - Specific channel to send messages
 # SLACK_USERNAME (optional) - Username that will appear as sender
@@ -40,7 +40,7 @@ else
 fi
 
 if [ -z "$DB_TYPE" ]; then
-  error_msg="DB_TYPE must be specified (mysql, postgresql or mongodb)"
+  error_msg="DB_TYPE must be specified (mysql, mariadb, postgresql or mongodb)"
   echo "Error: $error_msg"
   notify_failure "$error_msg" "Configuration validation failed"
   exit 1
@@ -70,14 +70,14 @@ DAY=$(date +%d)
 
 # Define dump filename based on DB_TYPE
 case "$DB_TYPE" in
-  "mysql"|"postgresql")
+  "mysql"|"mariadb"|"postgresql")
     DUMP_EXT="sql"
     ;;
   "mongodb")
     DUMP_EXT="archive"
     ;;
   *)
-    error_msg="DB_TYPE must be 'mysql', 'postgresql' or 'mongodb', received: $DB_TYPE"
+    error_msg="DB_TYPE must be 'mysql', 'mariadb', 'postgresql' or 'mongodb', received: $DB_TYPE"
     echo "Error: $error_msg"
     notify_failure "$error_msg" "Invalid database type configuration"
     exit 1
@@ -108,39 +108,104 @@ echo "[DEBUG] PERIODICITY: $PERIODICITY"
 case "$DB_TYPE" in
   "mysql")
     export MYSQL_PWD="$DB_PASSWORD"
-    echo "Executing mysqldump..."
-    if ! mysqldump $DUMP_OPTIONS -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" "$DB_NAME" | gzip > "$DUMP_FILE_GZ"; then
-      error_msg="mysqldump execution failed"
-      echo "Error: $error_msg"
-      notify_failure "$error_msg" "MySQL dump process failed - check database connectivity and credentials"
-      rm -f "$DUMP_FILE_GZ"
-      exit 1
+    DUMP_CMD="mysqldump"
+    if [ "${MYSQL_VERSION:-}" = "5.7" ]; then
+      if command -v mysqldump >/dev/null 2>&1; then
+        DUMP_CMD="mysqldump"
+      elif command -v mariadb-dump >/dev/null 2>&1; then
+        DUMP_CMD="mariadb-dump"
+      else
+        error_msg="No mysqldump or mariadb-dump available for MySQL 5.7"
+        echo "Error: $error_msg"
+        notify_failure "$error_msg" "MySQL 5.7 client not found - ensure mysql-client or mariadb-client is installed"
+        exit 1
+      fi
+    fi
+    echo "Executing $DUMP_CMD..."
+    if [ -n "$DB_NAME" ]; then
+      if ! $DUMP_CMD $DUMP_OPTIONS -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" "$DB_NAME" | gzip > "$DUMP_FILE_GZ"; then
+        error_msg="$DUMP_CMD execution failed"
+        echo "Error: $error_msg"
+        notify_failure "$error_msg" "MySQL dump process failed - check database connectivity and credentials"
+        rm -f "$DUMP_FILE_GZ"
+        exit 1
+      fi
+    else
+      if ! $DUMP_CMD $DUMP_OPTIONS --all-databases -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" | gzip > "$DUMP_FILE_GZ"; then
+        error_msg="$DUMP_CMD execution failed (all databases)"
+        echo "Error: $error_msg"
+        notify_failure "$error_msg" "MySQL full instance dump failed - check permissions and connectivity"
+        rm -f "$DUMP_FILE_GZ"
+        exit 1
+      fi
+    fi
+    ;;
+  "mariadb")
+    export MYSQL_PWD="$DB_PASSWORD"
+    echo "Executing mariadb-dump..."
+    if [ -n "$DB_NAME" ]; then
+      if ! mariadb-dump $DUMP_OPTIONS -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" "$DB_NAME" | gzip > "$DUMP_FILE_GZ"; then
+        error_msg="mariadb-dump execution failed"
+        echo "Error: $error_msg"
+        notify_failure "$error_msg" "MariaDB dump process failed - check database connectivity and credentials"
+        rm -f "$DUMP_FILE_GZ"
+        exit 1
+      fi
+    else
+      if ! mariadb-dump $DUMP_OPTIONS --all-databases -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" | gzip > "$DUMP_FILE_GZ"; then
+        error_msg="mariadb-dump execution failed (all databases)"
+        echo "Error: $error_msg"
+        notify_failure "$error_msg" "MariaDB full instance dump failed - check permissions and connectivity"
+        rm -f "$DUMP_FILE_GZ"
+        exit 1
+      fi
     fi
     ;;
   "postgresql")
     export PGPASSWORD="$DB_PASSWORD"
-    echo "Executing pg_dump..."
-    if ! pg_dump $DUMP_OPTIONS -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "$DB_USER" "$DB_NAME" | gzip > "$DUMP_FILE_GZ"; then
-      error_msg="pg_dump execution failed"
-      echo "Error: $error_msg"
-      notify_failure "$error_msg" "PostgreSQL dump process failed - check database connectivity and credentials"
-      rm -f "$DUMP_FILE_GZ"
-      exit 1
+    if [ -n "$DB_NAME" ]; then
+      echo "Executing pg_dump (single database)..."
+      if ! pg_dump $DUMP_OPTIONS -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "$DB_USER" "$DB_NAME" | gzip > "$DUMP_FILE_GZ"; then
+        error_msg="pg_dump execution failed"
+        echo "Error: $error_msg"
+        notify_failure "$error_msg" "PostgreSQL dump process failed - check database connectivity and credentials"
+        rm -f "$DUMP_FILE_GZ"
+        exit 1
+      fi
+    else
+      echo "Executing pg_dumpall (all databases)..."
+      if ! pg_dumpall $DUMP_OPTIONS -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "$DB_USER" | gzip > "$DUMP_FILE_GZ"; then
+        error_msg="pg_dumpall execution failed"
+        echo "Error: $error_msg"
+        notify_failure "$error_msg" "PostgreSQL full instance dump failed - check permissions and connectivity"
+        rm -f "$DUMP_FILE_GZ"
+        exit 1
+      fi
     fi
     ;;
   "mongodb")
     echo "Executing mongodump..."
     # mongodump outputs to stdout when using --archive; --gzip compresses the output
-    if ! mongodump $DUMP_OPTIONS --host "$DB_HOST" --port "${DB_PORT:-27017}" --username "$DB_USER" --password "$DB_PASSWORD" --archive --gzip > "$DUMP_FILE_GZ"; then
-      error_msg="mongodump execution failed"
-      echo "Error: $error_msg"
-      notify_failure "$error_msg" "MongoDB dump process failed - check database connectivity and credentials"
-      rm -f "$DUMP_FILE_GZ"
-      exit 1
+    if [ -n "$DB_NAME" ]; then
+      if ! mongodump $DUMP_OPTIONS --host "$DB_HOST" --port "${DB_PORT:-27017}" --username "$DB_USER" --password "$DB_PASSWORD" --db "$DB_NAME" --archive --gzip > "$DUMP_FILE_GZ"; then
+        error_msg="mongodump execution failed"
+        echo "Error: $error_msg"
+        notify_failure "$error_msg" "MongoDB dump process failed - check database connectivity and credentials"
+        rm -f "$DUMP_FILE_GZ"
+        exit 1
+      fi
+    else
+      if ! mongodump $DUMP_OPTIONS --host "$DB_HOST" --port "${DB_PORT:-27017}" --username "$DB_USER" --password "$DB_PASSWORD" --archive --gzip > "$DUMP_FILE_GZ"; then
+        error_msg="mongodump execution failed (all databases)"
+        echo "Error: $error_msg"
+        notify_failure "$error_msg" "MongoDB full instance dump failed - check permissions and connectivity"
+        rm -f "$DUMP_FILE_GZ"
+        exit 1
+      fi
     fi
     ;;
   *)
-    error_msg="DB_TYPE must be 'mysql', 'postgresql' or 'mongodb', received: $DB_TYPE"
+    error_msg="DB_TYPE must be 'mysql', 'mariadb', 'postgresql' or 'mongodb', received: $DB_TYPE"
     echo "Error: $error_msg"
     notify_failure "$error_msg" "Invalid database type configuration"
     exit 1

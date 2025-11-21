@@ -7,13 +7,15 @@ set -e
 echo "=== DumpScript Restore Container Starting ==="
 echo "DB_TYPE: $DB_TYPE"
 echo "POSTGRES_VERSION: ${POSTGRES_VERSION:-16}"
-echo "MYSQL_VERSION: ${MYSQL_VERSION:-10.11}"
+echo "MYSQL_VERSION: ${MYSQL_VERSION:-8.0}"
 echo "MongoDB tools: will be installed when DB_TYPE=mongodb"
 echo "[DEBUG] DB_TYPE: $DB_TYPE"
 if [ "$DB_TYPE" = "postgresql" ]; then
   echo "[DEBUG] POSTGRES_VERSION: ${POSTGRES_VERSION:-16}"
 elif [ "$DB_TYPE" = "mysql" ]; then
-  echo "[DEBUG] MYSQL_VERSION: ${MYSQL_VERSION:-10.11}"
+  echo "[DEBUG] MYSQL_VERSION: ${MYSQL_VERSION:-8.0}"
+elif [ "$DB_TYPE" = "mariadb" ]; then
+  echo "[DEBUG] MARIADB_VERSION: ${MARIADB_VERSION:-11.4}"
 elif [ "$DB_TYPE" = "mongodb" ]; then
   echo "[DEBUG] MongoDB tools will be installed"
 fi
@@ -23,7 +25,10 @@ case "$DB_TYPE" in
         echo "POSTGRES_VERSION: ${POSTGRES_VERSION:-16}"
         ;;
     "mysql")
-        echo "MYSQL_VERSION: ${MYSQL_VERSION:-10.11}"
+        echo "MYSQL_VERSION: ${MYSQL_VERSION:-8.0}"
+        ;;
+    "mariadb")
+        echo "MARIADB_VERSION: ${MARIADB_VERSION:-11.4}"
         ;;
     "mongodb")
         echo "MongoDB tools will be installed"
@@ -32,7 +37,7 @@ esac
 
 # Validate required variables
 if [ -z "$DB_TYPE" ]; then
-    echo "Error: DB_TYPE must be specified (postgresql, mysql or mongodb)"
+    echo "Error: DB_TYPE must be specified (postgresql, mysql, mariadb or mongodb)"
     exit 1
 fi
 
@@ -55,6 +60,13 @@ case "$DB_TYPE" in
             exit 1
         fi
         echo "MySQL client version: $(mysql --version)"
+        ;;
+    "mariadb")
+        if ! command -v mysql &> /dev/null; then
+            echo "Error: mysql not found after installation"
+            exit 1
+        fi
+        echo "MariaDB client version: $(mysql --version)"
         ;;
     "mongodb")
         if ! command -v mongorestore &> /dev/null; then

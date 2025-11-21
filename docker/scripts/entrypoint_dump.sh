@@ -42,14 +42,16 @@ echo "[DEBUG] DB_TYPE: $DB_TYPE"
 if [ "$DB_TYPE" = "postgresql" ]; then
   echo "[DEBUG] POSTGRES_VERSION: ${POSTGRES_VERSION:-16}"
 elif [ "$DB_TYPE" = "mysql" ]; then
-  echo "[DEBUG] MYSQL_VERSION: ${MYSQL_VERSION:-10.11}"
+  echo "[DEBUG] MYSQL_VERSION: ${MYSQL_VERSION:-8.0}"
+elif [ "$DB_TYPE" = "mariadb" ]; then
+  echo "[DEBUG] MARIADB_VERSION: ${MARIADB_VERSION:-11.4}"
 elif [ "$DB_TYPE" = "mongodb" ]; then
   echo "[DEBUG] MongoDB tools will be installed"
 fi
 
 # Validate required variables
 if [ -z "$DB_TYPE" ]; then
-    error_msg="DB_TYPE must be specified (postgresql, mysql or mongodb)"
+    error_msg="DB_TYPE must be specified (postgresql, mysql, mariadb or mongodb)"
     echo "Error: $error_msg"
     notify_failure "$error_msg" "Configuration validation failed in entrypoint"
     exit 1
@@ -82,6 +84,15 @@ case "$DB_TYPE" in
             exit 1
         fi
         echo "MySQL client version: $(mysqldump --version)"
+        ;;
+    "mariadb")
+        if ! command -v mariadb-dump &> /dev/null; then
+            error_msg="mariadb-dump not found after installation"
+            echo "Error: $error_msg"
+            notify_failure "$error_msg" "MariaDB client installation failed"
+            exit 1
+        fi
+        echo "MariaDB client version: $(mariadb-dump --version)"
         ;;
     "mongodb")
         if ! command -v mongodump &> /dev/null; then

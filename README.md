@@ -35,9 +35,10 @@ pg_dump: detail: server version: 16.2; pg_dump version: 15.13
 
 ### MySQL/MariaDB
 Supported versions: 
-- `8.0` - MySQL 8.0
-- `10.11` - MariaDB 10.11 (default)
-- `11.4` - MariaDB 11.4
+- `5.7` - MySQL 5.7 (uses `mysqldump`; may use compatible MariaDB client if 5.7 client unavailable on base image)
+- `8.0` - MySQL 8.0 (uses `mysqldump`)
+- `10.11` - MariaDB 10.11 (default, uses `mariadb-dump`)
+- `11.4` - MariaDB 11.4 (uses `mariadb-dump`)
 
 ### MongoDB Tools
 MongoDB backups use `mongodump`/`mongorestore` from MongoDB Database Tools.
@@ -48,11 +49,10 @@ Tools are installed at runtime (no version pinning).
 ### Environment Variables
 
 #### Required
-- `DB_TYPE` - Database type (`postgresql`, `mysql` or `mongodb`)
+- `DB_TYPE` - Database type (`postgresql`, `mysql`, `mariadb` or `mongodb`)
 - `DB_HOST` - Database host
 - `DB_USER` - Database username
 - `DB_PASSWORD` - Database password
-- `DB_NAME` - Database name
 - `AWS_REGION` - AWS region for S3
 - `S3_BUCKET` - S3 bucket name
 - `S3_PREFIX` - S3 prefix for dumps
@@ -61,10 +61,12 @@ Tools are installed at runtime (no version pinning).
 
 #### Optional
 - `POSTGRES_VERSION` - PostgreSQL client version (default: `16`)
-- `MYSQL_VERSION` - MySQL/MariaDB client version (default: `10.11`)
+- `MYSQL_VERSION` - MySQL client version (`5.7` or `8.0`) — dumps with `mysqldump`
+- `MARIADB_VERSION` - MariaDB client version (default: `11.4`) — dumps with `mariadb-dump`
 - `DB_PORT` - Database port (default: 5432 for PostgreSQL, 3306 for MySQL, 27017 for MongoDB)
 - `AWS_ROLE_ARN` - AWS IAM role ARN for authentication
-- `DUMP_OPTIONS` - Additional options for `pg_dump`, `mysqldump` or `mongodump` (e.g., `--authenticationDatabase=admin`)
+- `DUMP_OPTIONS` - Additional options for `pg_dump`, `mysqldump`, `mariadb-dump` ou `mongodump` (e.g., `--authenticationDatabase=admin`)
+- `DB_NAME` - Database name (se omitido, faz backup/restore de todos os databases da instância)
 
 ### Docker Example
 
@@ -96,6 +98,21 @@ Tools are installed at runtime (no version pinning).
   -e S3_BUCKET=my-backups \
   -e S3_PREFIX=mysql-dumps \
   -e PERIODICITY=weekly \
+  -e RETENTION_DAYS=7 \
+  ghcr.io/cloudscript-technology/dumpscript:latest
+
+# MariaDB 11.4 daily dump (mariadb-dump)
+ docker run --rm \
+  -e DB_TYPE=mariadb \
+  -e MARIADB_VERSION=11.4 \
+  -e DB_HOST=localhost \
+  -e DB_USER=user \
+  -e DB_PASSWORD=password \
+  -e DB_NAME=mydb \
+  -e AWS_REGION=us-east-1 \
+  -e S3_BUCKET=my-backups \
+  -e S3_PREFIX=mariadb-dumps \
+  -e PERIODICITY=daily \
   -e RETENTION_DAYS=7 \
   ghcr.io/cloudscript-technology/dumpscript:latest
 
@@ -143,8 +160,8 @@ databases:
       bucketPrefix: "postgresql/production"
     extraArgs: "--no-owner --no-acl"
     
-  - type: mysql
-    version: "10.11"  # Matches MariaDB server version
+  - type: mariadb
+    version: "11.4"  # Matches MariaDB server version
     periodicity:
       - type: daily
         retentionDays: 14
@@ -153,7 +170,7 @@ databases:
         retentionDays: 365
         schedule: "0 4 1 * *"  # Monthly on 1st at 4:00 AM
     connectionInfo:
-      host: "mysql.example.com"
+      host: "mariadb.example.com"
       username: "backup_user"
       password: "secure_password"  
       database: "app_db"
@@ -161,7 +178,7 @@ databases:
     aws:
       region: "us-east-1"
       bucket: "my-db-backups"
-      bucketPrefix: "mysql/app"
+      bucketPrefix: "mariadb/app"
     extraArgs: "--single-transaction --routines"
 ```
 
@@ -322,7 +339,7 @@ notifications:
 
 ## How It Works
 
-1. **Runtime Installation**: When the container starts, it reads the `POSTGRES_VERSION` or `MYSQL_VERSION` environment variable
+1. **Runtime Installation**: When the container starts, it reads the `POSTGRES_VERSION`, `MYSQL_VERSION` or `MARIADB_VERSION` environment variables
 2. **Dynamic Client Installation**: The appropriate database client is installed using Alpine's package manager
 3. **Version Verification**: The installation is verified and client version is logged
 4. **Database Operations**: The original dump/restore scripts are executed with the correct client version
@@ -423,12 +440,12 @@ docker build -t dumpscript-restore:latest -f docker/Dockerfile.restore .
 
 - `docker/Dockerfile.dump` - Dump container image
 - `docker/Dockerfile.restore` - Restore container image
-- `scripts/dump_db_to_s3.sh` - Database dump script
-- `scripts/restore_db_from_s3.sh` - Database restore script
-- `scripts/install_db_clients.sh` - Dynamic client installation script
-- `scripts/entrypoint_dump.sh` - Dump container entrypoint
-- `scripts/entrypoint_restore.sh` - Restore container entrypoint
-- `scripts/notify_slack.sh` - Slack notification script
+- `docker/scripts/dump_db_to_s3.sh` - Database dump script
+- `docker/scripts/restore_db_from_s3.sh` - Database restore script
+- `docker/scripts/install_db_clients.sh` - Dynamic client installation script
+- `docker/scripts/entrypoint_dump.sh` - Dump container entrypoint
+- `docker/scripts/entrypoint_restore.sh` - Restore container entrypoint
+- `docker/scripts/notify_slack.sh` - Slack notification script
 
 ## AWS IAM Policy Requirements
 
@@ -469,3 +486,32 @@ Below is an example of a minimal IAM policy for S3 access:
 ```
 
 Replace `your-bucket-name` with the actual name of your S3 bucket. Granting only these permissions ensures the tool can perform all backup, restore, and cleanup operations securely.
+# MySQL 5.7 daily dump
+ docker run --rm \
+  -e DB_TYPE=mysql \
+  -e MYSQL_VERSION=5.7 \
+  -e DB_HOST=localhost \
+  -e DB_USER=user \
+  -e DB_PASSWORD=password \
+  -e DB_NAME=mydb \
+  -e AWS_REGION=us-east-1 \
+  -e S3_BUCKET=my-backups \
+  -e S3_PREFIX=mysql57-dumps \
+  -e PERIODICITY=daily \
+  -e RETENTION_DAYS=7 \
+  ghcr.io/cloudscript-technology/dumpscript:latest
+### Full instance dump (DB_NAME omitted)
+
+- `MySQL/MariaDB`: use `--all-databases` with `mysqldump`/`mariadb-dump`.
+- `PostgreSQL`: use `pg_dumpall` for all databases, roles, and tablespaces.
+- `MongoDB`: omit `--db` in `mongodump` to dump the entire instance.
+
+Required privileges depend on the engine. Ensure the user can list and read all databases.
+
+### Full instance restore (DB_NAME omitted)
+
+- `MySQL/MariaDB`: import directly into the server without selecting a database (`mysql`/`mariadb` reading the file). If the dump was generated with `--all-databases`, it will include creation and data for all databases.
+- `PostgreSQL`: use `psql -d postgres` to apply `pg_dumpall` (roles, tablespaces, and all databases). Requires elevated privileges.
+- `MongoDB`: omit `--db` in `mongorestore` to restore the entire instance.
+
+For full instance restores, `CREATE_DB` only has an effect when `DB_NAME` is defined.

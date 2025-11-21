@@ -37,9 +37,9 @@ RUN chmod +x /usr/local/bin/dump_db_to_s3.sh \
     && chmod +x /usr/local/bin/aws_role_utils.sh
 
 # Expects all variables to be set in the environment
-# DB_TYPE (mysql or postgresql), DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
+# DB_TYPE (mysql, mariadb, postgresql or mongodb), DB_HOST, DB_PORT, DB_USER, DB_PASSWORD
 # AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, AWS_ROLE_ARN, AWS_REGION, S3_BUCKET, S3_PREFIX, PERIODICITY
-# DUMP_OPTIONS (specific options for mysqldump or pg_dump)
+# DUMP_OPTIONS (specific options for mysqldump, mariadb-dump or pg_dump)
 # SLACK_WEBHOOK_URL (optional), SLACK_CHANNEL (optional), SLACK_USERNAME (optional), SLACK_NOTIFY_SUCCESS (optional)
 
 ENTRYPOINT ["/usr/local/bin/entrypoint_dump.sh"]

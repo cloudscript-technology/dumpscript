@@ -2,11 +2,11 @@
 set -e
 
 # Wait for all variables to be set in the environment
-# DB_TYPE (mysql, postgresql or mongodb), DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
+# DB_TYPE (mysql, mariadb, postgresql or mongodb), DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
 # AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, AWS_ROLE_ARN, AWS_REGION, S3_BUCKET, S3_KEY, CREATE_DB
 
 if [ -z "$DB_TYPE" ]; then
-  echo "Error: DB_TYPE must be specified (mysql, postgresql or mongodb)"
+  echo "Error: DB_TYPE must be specified (mysql, mariadb, postgresql or mongodb)"
   exit 1
 fi
 
@@ -39,7 +39,7 @@ echo "[DEBUG] S3_PREFIX: $S3_PREFIX"
 echo "[DEBUG] S3_KEY: $S3_KEY"
 
 case "$DB_TYPE" in
-  "mysql"|"postgresql")
+  "mysql"|"mariadb"|"postgresql")
     RESTORE_FILE_GZ="dump_restore.sql.gz"
     aws s3 cp "s3://$S3_BUCKET/$S3_KEY" "$RESTORE_FILE_GZ"
     gunzip -f "$RESTORE_FILE_GZ"
@@ -57,41 +57,85 @@ esac
 case "$DB_TYPE" in
   "mysql")
     export MYSQL_PWD="$DB_PASSWORD"
-    
-    if [ "$CREATE_DB" = "1" ]; then
-      echo "Creating MySQL database $DB_NAME..."
-      mysql -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" -e "CREATE DATABASE IF NOT EXISTS \`$DB_NAME\`;"
+    # Choose client command (mysql preferred, fallback to mariadb)
+    MYSQL_CLIENT_CMD="mysql"
+    if ! command -v mysql >/dev/null 2>&1 && command -v mariadb >/dev/null 2>&1; then
+      MYSQL_CLIENT_CMD="mariadb"
+    elif ! command -v mysql >/dev/null 2>&1 && ! command -v mariadb >/dev/null 2>&1; then
+      echo "Error: No MySQL/MariaDB client found (mysql or mariadb)"
+      exit 1
     fi
-    
-    mysql -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" "$DB_NAME" < dump_restore.sql
+
+    if [ -n "$DB_NAME" ]; then
+      if [ "$CREATE_DB" = "1" ]; then
+        echo "Creating MySQL database $DB_NAME..."
+        $MYSQL_CLIENT_CMD -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" -e "CREATE DATABASE IF NOT EXISTS \`$DB_NAME\`;"
+      fi
+      $MYSQL_CLIENT_CMD -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" "$DB_NAME" < dump_restore.sql
+    else
+      echo "Restoring full MySQL instance (no DB_NAME provided)..."
+      $MYSQL_CLIENT_CMD -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" < dump_restore.sql
+    fi
+    ;;
+  "mariadb")
+    export MYSQL_PWD="$DB_PASSWORD"
+    # Choose client command (mariadb preferred, fallback to mysql)
+    MARIADB_CLIENT_CMD="mariadb"
+    if ! command -v mariadb >/dev/null 2>&1 && command -v mysql >/dev/null 2>&1; then
+      MARIADB_CLIENT_CMD="mysql"
+    elif ! command -v mariadb >/dev/null 2>&1 && ! command -v mysql >/dev/null 2>&1; then
+      echo "Error: No MariaDB/MySQL client found (mariadb or mysql)"
+      exit 1
+    fi
+
+    if [ -n "$DB_NAME" ]; then
+      if [ "$CREATE_DB" = "1" ]; then
+        echo "Creating MariaDB database $DB_NAME..."
+        $MARIADB_CLIENT_CMD -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" -e "CREATE DATABASE IF NOT EXISTS \`$DB_NAME\`;"
+      fi
+      $MARIADB_CLIENT_CMD -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" "$DB_NAME" < dump_restore.sql
+    else
+      echo "Restoring full MariaDB instance (no DB_NAME provided)..."
+      $MARIADB_CLIENT_CMD -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" < dump_restore.sql
+    fi
     ;;
     
   "postgresql")
     export PGPASSWORD="$DB_PASSWORD"
-    
-    if [ "$CREATE_DB" = "1" ]; then
-      echo "Creating PostgreSQL database $DB_NAME..."
-      psql -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "$DB_USER" -d postgres -c "CREATE DATABASE \"$DB_NAME\";" || echo "Database already exists."
+    if [ -n "$DB_NAME" ]; then
+      if [ "$CREATE_DB" = "1" ]; then
+        echo "Creating PostgreSQL database $DB_NAME..."
+        psql -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "$DB_USER" -d postgres -c "CREATE DATABASE \"$DB_NAME\";" || echo "Database already exists."
+      fi
+      psql -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "$DB_USER" "$DB_NAME" < dump_restore.sql
+    else
+      echo "Restoring full PostgreSQL instance (pg_dumpall)..."
+      psql -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "$DB_USER" -d postgres < dump_restore.sql
     fi
-    
-    psql -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "$DB_USER" "$DB_NAME" < dump_restore.sql
     ;;
   "mongodb")
     echo "Restoring MongoDB archive..."
     # mongorestore can read gzipped archive when --gzip is provided
-    if ! mongorestore --host "$DB_HOST" --port "${DB_PORT:-27017}" --username "$DB_USER" --password "$DB_PASSWORD" --db "$DB_NAME" --archive --gzip < "$RESTORE_FILE_GZ"; then
-      echo "Error: mongorestore failed"
-      exit 1
+    if [ -n "$DB_NAME" ]; then
+      if ! mongorestore --host "$DB_HOST" --port "${DB_PORT:-27017}" --username "$DB_USER" --password "$DB_PASSWORD" --db "$DB_NAME" --archive --gzip < "$RESTORE_FILE_GZ"; then
+        echo "Error: mongorestore failed"
+        exit 1
+      fi
+    else
+      if ! mongorestore --host "$DB_HOST" --port "${DB_PORT:-27017}" --username "$DB_USER" --password "$DB_PASSWORD" --archive --gzip < "$RESTORE_FILE_GZ"; then
+        echo "Error: mongorestore failed (full instance)"
+        exit 1
+      fi
     fi
     ;;
   
   *)
-    echo "Error: DB_TYPE must be 'mysql', 'postgresql' or 'mongodb', received: $DB_TYPE"
+    echo "Error: DB_TYPE must be 'mysql', 'mariadb', 'postgresql' or 'mongodb', received: $DB_TYPE"
     exit 1
     ;;
 esac
 
-if [ "$DB_TYPE" = "mysql" ] || [ "$DB_TYPE" = "postgresql" ]; then
+if [ "$DB_TYPE" = "mysql" ] || [ "$DB_TYPE" = "mariadb" ] || [ "$DB_TYPE" = "postgresql" ]; then
   rm -f dump_restore.sql
 else
   rm -f "$RESTORE_FILE_GZ"
