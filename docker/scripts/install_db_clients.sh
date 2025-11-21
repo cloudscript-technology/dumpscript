@@ -51,6 +51,7 @@ install_mysql_client() {
     case "$version" in
         "10.11"|"11.4")
             apk add --no-cache mariadb-client~=${version}
+            apk add --no-cache mariadb-connector-c
             echo "MariaDB client $version installed successfully"
             ;;
         "8.0")
@@ -84,6 +85,7 @@ install_mariadb_client() {
     case "$version" in
         "10.11"|"11.4")
             apk add --no-cache mariadb-client~=${version}
+            apk add --no-cache mariadb-connector-c
             echo "MariaDB client $version installed successfully"
             ;;
         *)
