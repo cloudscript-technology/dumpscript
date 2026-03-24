@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 # AWS Role Utilities - Shared functions for AWS role assumption
 # This script contains reusable functions for AWS authentication

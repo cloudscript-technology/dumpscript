@@ -1,55 +1,67 @@
-#!/bin/sh
+#!/bin/bash
 set -e
 
 # Wait for all variables to be set in the environment
 # DB_TYPE (mysql, mariadb, postgresql or mongodb), DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
-# AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, AWS_ROLE_ARN, AWS_REGION, S3_BUCKET, S3_KEY, CREATE_DB
+# STORAGE_BACKEND ("s3" or "azure", default: "s3")
+# S3 backend: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, AWS_ROLE_ARN, AWS_REGION, S3_BUCKET, S3_KEY
+# Azure backend: AZURE_STORAGE_ACCOUNT, AZURE_STORAGE_KEY or AZURE_STORAGE_SAS_TOKEN, AZURE_STORAGE_CONTAINER, S3_KEY
+# CREATE_DB (optional)
 
 if [ -z "$DB_TYPE" ]; then
   echo "Error: DB_TYPE must be specified (mysql, mariadb, postgresql or mongodb)"
   exit 1
 fi
 
-export AWS_REGION
-
-# Source AWS utilities for role assumption functionality
-if [ -f "/usr/local/bin/aws_role_utils.sh" ]; then
-    . /usr/local/bin/aws_role_utils.sh
-elif [ -f "$(dirname "$0")/aws_role_utils.sh" ]; then
-    . "$(dirname "$0")/aws_role_utils.sh"
+# Source storage utilities
+if [ -f "/usr/local/bin/storage_utils.sh" ]; then
+    . /usr/local/bin/storage_utils.sh
+elif [ -f "$(dirname "$0")/storage_utils.sh" ]; then
+    . "$(dirname "$0")/storage_utils.sh"
 else
-    echo "Warning: AWS role utilities not found. Role assumption may not work."
+    echo "Error: Storage utilities not found."
+    exit 1
 fi
 
-# Assume AWS role if AWS_ROLE_ARN is defined (initial authentication)
-if command -v assume_aws_role >/dev/null 2>&1; then
-    if ! assume_aws_role; then
-        echo "Warning: Failed to assume AWS role, continuing with existing credentials"
+# Source AWS utilities and assume role (S3 backend only)
+if [ "$(storage_get_backend)" = "s3" ]; then
+    export AWS_REGION
+    if [ -f "/usr/local/bin/aws_role_utils.sh" ]; then
+        . /usr/local/bin/aws_role_utils.sh
+    elif [ -f "$(dirname "$0")/aws_role_utils.sh" ]; then
+        . "$(dirname "$0")/aws_role_utils.sh"
+    else
+        echo "Warning: AWS role utilities not found. Role assumption may not work."
     fi
-else
-    echo "Warning: assume_aws_role function not available. Proceeding with default credentials."
+
+    if command -v assume_aws_role >/dev/null 2>&1; then
+        if ! assume_aws_role; then
+            echo "Warning: Failed to assume AWS role, continuing with existing credentials"
+        fi
+    else
+        echo "Warning: assume_aws_role function not available. Proceeding with default credentials."
+    fi
 fi
 
 echo "[DEBUG] DB_TYPE: $DB_TYPE"
 echo "[DEBUG] DB_HOST: $DB_HOST"
 echo "[DEBUG] DB_USER: $DB_USER"
 echo "[DEBUG] DB_NAME: $DB_NAME"
-echo "[DEBUG] S3_BUCKET: $S3_BUCKET"
-echo "[DEBUG] S3_PREFIX: $S3_PREFIX"
+echo "[DEBUG] STORAGE_BACKEND: $(storage_get_backend)"
 echo "[DEBUG] S3_KEY: $S3_KEY"
 
 case "$DB_TYPE" in
   "mysql"|"mariadb"|"postgresql")
     RESTORE_FILE_GZ="dump_restore.sql.gz"
-    aws s3 cp "s3://$S3_BUCKET/$S3_KEY" "$RESTORE_FILE_GZ"
+    storage_download "$S3_KEY" "$RESTORE_FILE_GZ"
     gunzip -f "$RESTORE_FILE_GZ"
     ;;
   "mongodb")
     RESTORE_FILE_GZ="dump_restore.archive.gz"
-    aws s3 cp "s3://$S3_BUCKET/$S3_KEY" "$RESTORE_FILE_GZ"
+    storage_download "$S3_KEY" "$RESTORE_FILE_GZ"
     ;;
   *)
-    echo "Error: DB_TYPE must be 'mysql', 'postgresql' or 'mongodb', received: $DB_TYPE"
+    echo "Error: DB_TYPE must be 'mysql', 'mariadb', 'postgresql' or 'mongodb', received: $DB_TYPE"
     exit 1
     ;;
 esac

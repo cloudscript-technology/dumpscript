@@ -1,11 +1,13 @@
-#!/bin/sh
+#!/bin/bash
 set -e
 set -o pipefail
 
 # Wait for all variables to be set in the environment
 # DB_TYPE (mysql, mariadb, postgresql or mongodb), DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
-# AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, AWS_ROLE_ARN, AWS_REGION, S3_BUCKET, S3_PREFIX, PERIODICITY
-# DUMP_OPTIONS (specific options for mysqldump, mariadb-dump or pg_dump)
+# STORAGE_BACKEND ("s3" or "azure", default: "s3")
+# S3 backend: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, AWS_ROLE_ARN, AWS_REGION, S3_BUCKET, S3_PREFIX
+# Azure backend: AZURE_STORAGE_ACCOUNT, AZURE_STORAGE_KEY or AZURE_STORAGE_SAS_TOKEN, AZURE_STORAGE_CONTAINER, AZURE_STORAGE_PREFIX
+# PERIODICITY, DUMP_OPTIONS (specific options for mysqldump, mariadb-dump or pg_dump)
 # SLACK_WEBHOOK_URL (optional) - Slack webhook URL for notifications
 # SLACK_CHANNEL (optional) - Specific channel to send messages
 # SLACK_USERNAME (optional) - Username that will appear as sender
@@ -30,13 +32,26 @@ notify_success() {
     fi
 }
 
-# Source AWS utilities for role assumption functionality
-if [ -f "/usr/local/bin/aws_role_utils.sh" ]; then
-    . /usr/local/bin/aws_role_utils.sh
-elif [ -f "$(dirname "$0")/aws_role_utils.sh" ]; then
-    . "$(dirname "$0")/aws_role_utils.sh"
+# Source storage utilities
+if [ -f "/usr/local/bin/storage_utils.sh" ]; then
+    . /usr/local/bin/storage_utils.sh
+elif [ -f "$(dirname "$0")/storage_utils.sh" ]; then
+    . "$(dirname "$0")/storage_utils.sh"
 else
-    echo "Warning: AWS role utilities not found. Role assumption may not work."
+    echo "Error: Storage utilities not found."
+    notify_failure "Storage utilities not found" "Missing storage_utils.sh script"
+    exit 1
+fi
+
+# Source AWS utilities for role assumption functionality (S3 backend only)
+if [ "$(storage_get_backend)" = "s3" ]; then
+    if [ -f "/usr/local/bin/aws_role_utils.sh" ]; then
+        . /usr/local/bin/aws_role_utils.sh
+    elif [ -f "$(dirname "$0")/aws_role_utils.sh" ]; then
+        . "$(dirname "$0")/aws_role_utils.sh"
+    else
+        echo "Warning: AWS role utilities not found. Role assumption may not work."
+    fi
 fi
 
 if [ -z "$DB_TYPE" ]; then
@@ -53,13 +68,15 @@ if [ -z "$PERIODICITY" ]; then
   exit 1
 fi
 
-# Assume AWS role if AWS_ROLE_ARN is defined (initial authentication)
-if command -v assume_aws_role >/dev/null 2>&1; then
-  if ! assume_aws_role; then
-    echo "Warning: Failed to assume AWS role, continuing with existing credentials"
+# Assume AWS role if AWS_ROLE_ARN is defined (initial authentication, S3 backend only)
+if [ "$(storage_get_backend)" = "s3" ]; then
+  if command -v assume_aws_role >/dev/null 2>&1; then
+    if ! assume_aws_role; then
+      echo "Warning: Failed to assume AWS role, continuing with existing credentials"
+    fi
+  else
+    echo "Warning: AWS role utilities not available; proceeding without assuming role"
   fi
-else
-  echo "Warning: AWS role utilities not available; proceeding without assuming role"
 fi
 
 # Create data structure for S3 path
@@ -101,8 +118,9 @@ echo "[DEBUG] DB_TYPE: $DB_TYPE"
 echo "[DEBUG] DB_HOST: $DB_HOST"
 echo "[DEBUG] DB_USER: $DB_USER"
 echo "[DEBUG] DB_NAME: $DB_NAME"
-echo "[DEBUG] S3_BUCKET: $S3_BUCKET"
-echo "[DEBUG] S3_PREFIX: $S3_PREFIX"
+echo "[DEBUG] STORAGE_BACKEND: $(storage_get_backend)"
+echo "[DEBUG] Container/Bucket: $(storage_get_container)"
+echo "[DEBUG] Prefix: $(storage_get_prefix)"
 echo "[DEBUG] PERIODICITY: $PERIODICITY"
 
 case "$DB_TYPE" in
@@ -121,8 +139,9 @@ case "$DB_TYPE" in
         exit 1
       fi
     fi
-    echo "Executing $DUMP_CMD..."
     if [ -n "$DB_NAME" ]; then
+      echo "[DEBUG] Command: $DUMP_CMD $DUMP_OPTIONS -h $DB_HOST -P ${DB_PORT:-3306} -u $DB_USER $DB_NAME | gzip > $DUMP_FILE_GZ"
+      echo "Executing $DUMP_CMD..."
       if ! $DUMP_CMD $DUMP_OPTIONS -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" "$DB_NAME" | gzip > "$DUMP_FILE_GZ"; then
         error_msg="$DUMP_CMD execution failed"
         echo "Error: $error_msg"
@@ -131,6 +150,8 @@ case "$DB_TYPE" in
         exit 1
       fi
     else
+      echo "[DEBUG] Command: $DUMP_CMD $DUMP_OPTIONS --all-databases -h $DB_HOST -P ${DB_PORT:-3306} -u $DB_USER | gzip > $DUMP_FILE_GZ"
+      echo "Executing $DUMP_CMD (all databases)..."
       if ! $DUMP_CMD $DUMP_OPTIONS --all-databases -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" | gzip > "$DUMP_FILE_GZ"; then
         error_msg="$DUMP_CMD execution failed (all databases)"
         echo "Error: $error_msg"
@@ -142,8 +163,9 @@ case "$DB_TYPE" in
     ;;
   "mariadb")
     export MYSQL_PWD="$DB_PASSWORD"
-    echo "Executing mariadb-dump..."
     if [ -n "$DB_NAME" ]; then
+      echo "[DEBUG] Command: mariadb-dump $DUMP_OPTIONS -h $DB_HOST -P ${DB_PORT:-3306} -u $DB_USER $DB_NAME | gzip > $DUMP_FILE_GZ"
+      echo "Executing mariadb-dump..."
       if ! mariadb-dump $DUMP_OPTIONS -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" "$DB_NAME" | gzip > "$DUMP_FILE_GZ"; then
         error_msg="mariadb-dump execution failed"
         echo "Error: $error_msg"
@@ -152,6 +174,8 @@ case "$DB_TYPE" in
         exit 1
       fi
     else
+      echo "[DEBUG] Command: mariadb-dump $DUMP_OPTIONS --all-databases -h $DB_HOST -P ${DB_PORT:-3306} -u $DB_USER | gzip > $DUMP_FILE_GZ"
+      echo "Executing mariadb-dump (all databases)..."
       if ! mariadb-dump $DUMP_OPTIONS --all-databases -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" | gzip > "$DUMP_FILE_GZ"; then
         error_msg="mariadb-dump execution failed (all databases)"
         echo "Error: $error_msg"
@@ -164,6 +188,7 @@ case "$DB_TYPE" in
   "postgresql")
     export PGPASSWORD="$DB_PASSWORD"
     if [ -n "$DB_NAME" ]; then
+      echo "[DEBUG] Command: pg_dump $DUMP_OPTIONS -h $DB_HOST -p ${DB_PORT:-5432} -U $DB_USER $DB_NAME | gzip > $DUMP_FILE_GZ"
       echo "Executing pg_dump (single database)..."
       if ! pg_dump $DUMP_OPTIONS -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "$DB_USER" "$DB_NAME" | gzip > "$DUMP_FILE_GZ"; then
         error_msg="pg_dump execution failed"
@@ -173,6 +198,7 @@ case "$DB_TYPE" in
         exit 1
       fi
     else
+      echo "[DEBUG] Command: pg_dumpall $DUMP_OPTIONS -h $DB_HOST -p ${DB_PORT:-5432} -U $DB_USER | gzip > $DUMP_FILE_GZ"
       echo "Executing pg_dumpall (all databases)..."
       if ! pg_dumpall $DUMP_OPTIONS -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "$DB_USER" | gzip > "$DUMP_FILE_GZ"; then
         error_msg="pg_dumpall execution failed"
@@ -184,9 +210,10 @@ case "$DB_TYPE" in
     fi
     ;;
   "mongodb")
-    echo "Executing mongodump..."
     # mongodump outputs to stdout when using --archive; --gzip compresses the output
     if [ -n "$DB_NAME" ]; then
+      echo "[DEBUG] Command: mongodump $DUMP_OPTIONS --host $DB_HOST --port ${DB_PORT:-27017} --username $DB_USER --password ****** --db $DB_NAME --archive --gzip > $DUMP_FILE_GZ"
+      echo "Executing mongodump..."
       if ! mongodump $DUMP_OPTIONS --host "$DB_HOST" --port "${DB_PORT:-27017}" --username "$DB_USER" --password "$DB_PASSWORD" --db "$DB_NAME" --archive --gzip > "$DUMP_FILE_GZ"; then
         error_msg="mongodump execution failed"
         echo "Error: $error_msg"
@@ -195,6 +222,8 @@ case "$DB_TYPE" in
         exit 1
       fi
     else
+      echo "[DEBUG] Command: mongodump $DUMP_OPTIONS --host $DB_HOST --port ${DB_PORT:-27017} --username $DB_USER --password ****** --archive --gzip > $DUMP_FILE_GZ"
+      echo "Executing mongodump (all databases)..."
       if ! mongodump $DUMP_OPTIONS --host "$DB_HOST" --port "${DB_PORT:-27017}" --username "$DB_USER" --password "$DB_PASSWORD" --archive --gzip > "$DUMP_FILE_GZ"; then
         error_msg="mongodump execution failed (all databases)"
         echo "Error: $error_msg"
@@ -262,37 +291,36 @@ echo "[DEBUG] - File owner: $(stat -c '%U:%G' "$DUMP_FILE_GZ" 2>/dev/null || ech
 echo "[DEBUG] - Directory contents after creation:"
 ls -la . 2>/dev/null || echo "Unable to list directory contents"
 
-# Construct the S3 path with data structure: bucket/prefix/periodicity/year/month/day/file
-S3_PATH="s3://$S3_BUCKET/$S3_PREFIX/$PERIODICITY/$YEAR/$MONTH/$DAY/$DUMP_FILE_GZ"
-echo "[DEBUG] S3_PATH: $S3_PATH"
+# Construct the remote path: prefix/periodicity/year/month/day/file
+STORAGE_PREFIX=$(storage_get_prefix)
+REMOTE_PATH="${STORAGE_PREFIX}/${PERIODICITY}/${YEAR}/${MONTH}/${DAY}/${DUMP_FILE_GZ}"
+DISPLAY_PATH=$(storage_display_path "$REMOTE_PATH")
+echo "[DEBUG] REMOTE_PATH: $REMOTE_PATH"
+echo "[DEBUG] DISPLAY_PATH: $DISPLAY_PATH"
 
-# Upload to S3 using robust upload system with automatic credential refresh
-echo "Uploading to S3 with automatic credential refresh..."
-echo "Destination path: $S3_PATH"
+# Upload using storage abstraction with automatic credential refresh
+echo "Uploading to $(storage_get_backend) storage..."
+echo "Destination path: $DISPLAY_PATH"
 
-# Verificar se o script de upload robusto existe
-if [ ! -f "/usr/local/bin/s3_upload_with_refresh.sh" ]; then
-  error_msg="S3 upload script not found"
+# Determine credential refresh function (S3 backend only)
+REFRESH_FUNC=""
+if [ "$(storage_get_backend)" = "s3" ] && command -v assume_aws_role >/dev/null 2>&1; then
+  REFRESH_FUNC="assume_aws_role"
+fi
+
+if ! storage_upload "$DUMP_FILE_GZ" "$REMOTE_PATH" "$REFRESH_FUNC"; then
+  error_msg="Failed to upload after multiple attempts"
   echo "Error: $error_msg"
-  notify_failure "$error_msg" "Missing s3_upload_with_refresh.sh script - check container build"
+  notify_failure "$error_msg" "Storage upload failed even after multiple retries - check storage permissions, network connectivity, and credentials"
   rm -f "$DUMP_FILE_GZ"
   exit 1
 fi
 
-# Use robust upload system with automatic refresh
-if ! /usr/local/bin/s3_upload_with_refresh.sh "$DUMP_FILE_GZ" "$S3_PATH" "assume_aws_role"; then
-  error_msg="Failed to upload to S3 after multiple attempts with credential refresh"
-  echo "Error: $error_msg"
-  notify_failure "$error_msg" "S3 upload failed even after multiple retries and credential refresh - check bucket permissions, network connectivity, and AWS credentials"
-  rm -f "$DUMP_FILE_GZ"
-  exit 1
-fi
-
-echo "S3 upload completed successfully with robust retry mechanism"
+echo "Upload completed successfully"
 
 rm "$DUMP_FILE_GZ"
 
-echo "Dump completed successfully: $S3_PATH"
+echo "Dump completed successfully: $DISPLAY_PATH"
 
 # Send success notification if configured
-notify_success "$S3_PATH" "$DUMP_SIZE"
+notify_success "$DISPLAY_PATH" "$DUMP_SIZE"

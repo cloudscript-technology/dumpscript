@@ -10,13 +10,36 @@ Database dump and restore tool with configurable client versions.
 ## Features
 
 - Support for PostgreSQL, MySQL/MariaDB and MongoDB databases
+- **Multiple storage backends** - S3-compatible storage (AWS, MinIO) and Azure Blob Storage
 - **Runtime configurable database client versions** - No need to rebuild images
 - **Multiple backup schedules** - Support for daily, weekly, monthly, and yearly backups per database
 - **Slack notifications** - Optional notifications for backup status
-- Automatic S3 upload of database dumps
+- Automatic upload of database dumps to configured storage backend
 - AWS IAM role support for secure access
 - Kubernetes CronJob deployment via Helm chart
 - Containerized execution with Alpine Linux
+
+## Storage Backends
+
+DumpScript supports two storage backends. The backend is selected via the `STORAGE_BACKEND` environment variable (defaults to `s3` for backward compatibility).
+
+### S3-Compatible Storage (default)
+
+Works with AWS S3, MinIO, and any S3-compatible object storage. This is the default backend — existing deployments require **zero changes**.
+
+### Azure Blob Storage
+
+Works with Azure Blob Storage accounts. Supports authentication via storage account key or SAS token.
+
+### Storage Path Structure
+
+Both backends use the same path structure for organizing backups:
+
+```
+<prefix>/<periodicity>/<year>/<month>/<day>/<dump_file>
+```
+
+Example: `postgresql-dumps/daily/2025/03/24/dump_20250324_120000.sql.gz`
 
 ## Database Client Versions
 
@@ -34,7 +57,7 @@ pg_dump: detail: server version: 16.2; pg_dump version: 15.13
 ```
 
 ### MySQL/MariaDB
-Supported versions: 
+Supported versions:
 - `5.7` - MySQL 5.7 (uses `mysqldump`; may use compatible MariaDB client if 5.7 client unavailable on base image)
 - `8.0` - MySQL 8.0 (uses `mysqldump`)
 - `10.11` - MariaDB 10.11 (default, uses `mariadb-dump`)
@@ -49,30 +72,70 @@ Tools are installed at runtime (no version pinning).
 ### Environment Variables
 
 #### Required
-- `DB_TYPE` - Database type (`postgresql`, `mysql`, `mariadb` or `mongodb`)
-- `DB_HOST` - Database host
-- `DB_USER` - Database username
-- `DB_PASSWORD` - Database password
-- `AWS_REGION` - AWS region for S3
-- `S3_BUCKET` - S3 bucket name
-- `S3_PREFIX` - S3 prefix for dumps
-- `PERIODICITY` - Backup periodicity (`daily`, `weekly`, `monthly`, `yearly`)
-- `RETENTION_DAYS` - Retention days
 
-#### Optional
-- `POSTGRES_VERSION` - PostgreSQL client version (default: `16`)
-- `MYSQL_VERSION` - MySQL client version (`5.7` or `8.0`) — dumps with `mysqldump`
-- `MARIADB_VERSION` - MariaDB client version (default: `11.4`) — dumps with `mariadb-dump`
-- `DB_PORT` - Database port (default: 5432 for PostgreSQL, 3306 for MySQL, 27017 for MongoDB)
-- `AWS_ROLE_ARN` - AWS IAM role ARN for authentication
-- `DUMP_OPTIONS` - Additional options for `pg_dump`, `mysqldump`, `mariadb-dump` ou `mongodump` (e.g., `--authenticationDatabase=admin`)
-- `DB_NAME` - Database name (se omitido, faz backup/restore de todos os databases da instância)
+| Variable | Description |
+|----------|-------------|
+| `DB_TYPE` | Database type (`postgresql`, `mysql`, `mariadb` or `mongodb`) |
+| `DB_HOST` | Database host |
+| `DB_USER` | Database username |
+| `DB_PASSWORD` | Database password |
+| `PERIODICITY` | Backup periodicity (`daily`, `weekly`, `monthly`, `yearly`) |
+| `RETENTION_DAYS` | Number of days to retain backups |
 
-### Docker Example
+#### Storage Backend
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `STORAGE_BACKEND` | `s3` | Storage backend: `s3` or `azure` |
+
+#### S3 Backend Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `AWS_REGION` | Yes | AWS region |
+| `S3_BUCKET` | Yes | S3 bucket name |
+| `S3_PREFIX` | Yes | S3 key prefix for dumps |
+| `AWS_ACCESS_KEY_ID` | Yes* | AWS access key (*or use IRSA) |
+| `AWS_SECRET_ACCESS_KEY` | Yes* | AWS secret key (*or use IRSA) |
+| `AWS_ROLE_ARN` | No | AWS IAM role ARN for IRSA authentication |
+| `AWS_S3_ENDPOINT_URL` | No | Custom S3 endpoint (for MinIO or S3-compatible storage) |
+
+#### Azure Backend Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `AZURE_STORAGE_ACCOUNT` | Yes | Azure storage account name |
+| `AZURE_STORAGE_KEY` | Yes* | Storage account access key (*or use SAS token) |
+| `AZURE_STORAGE_SAS_TOKEN` | No | SAS token (alternative to storage key) |
+| `AZURE_STORAGE_CONTAINER` | Yes | Azure Blob container name |
+| `AZURE_STORAGE_PREFIX` | Yes | Blob key prefix for dumps |
+
+#### Upload Tuning (optional, applies to all backends)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `STORAGE_UPLOAD_CUTOFF` | `200M` | File size threshold for multipart/chunked upload |
+| `STORAGE_CHUNK_SIZE` | `100M` | Chunk size for multipart/chunked upload |
+| `STORAGE_UPLOAD_CONCURRENCY` | `4` | Number of parallel upload threads |
+
+#### Database Options (optional)
+
+| Variable | Description |
+|----------|-------------|
+| `POSTGRES_VERSION` | PostgreSQL client version (default: `16`) |
+| `MYSQL_VERSION` | MySQL client version (`5.7` or `8.0`) — dumps with `mysqldump` |
+| `MARIADB_VERSION` | MariaDB client version (default: `11.4`) — dumps with `mariadb-dump` |
+| `DB_PORT` | Database port (default: 5432 for PostgreSQL, 3306 for MySQL, 27017 for MongoDB) |
+| `DB_NAME` | Database name (if omitted, dumps all databases in the instance) |
+| `DUMP_OPTIONS` | Additional options for the dump command (e.g., `--authenticationDatabase=admin`) |
+
+### Docker Examples
+
+#### S3 Backend
 
 ```bash
-# PostgreSQL 16 daily dump
- docker run --rm \
+# PostgreSQL 16 daily dump to S3
+docker run --rm \
   -e DB_TYPE=postgresql \
   -e POSTGRES_VERSION=16 \
   -e DB_HOST=localhost \
@@ -86,8 +149,8 @@ Tools are installed at runtime (no version pinning).
   -e RETENTION_DAYS=7 \
   ghcr.io/cloudscript-technology/dumpscript:latest
 
-# MySQL 8.0 weekly dump
- docker run --rm \
+# MySQL 8.0 weekly dump to S3
+docker run --rm \
   -e DB_TYPE=mysql \
   -e MYSQL_VERSION=8.0 \
   -e DB_HOST=localhost \
@@ -101,8 +164,8 @@ Tools are installed at runtime (no version pinning).
   -e RETENTION_DAYS=7 \
   ghcr.io/cloudscript-technology/dumpscript:latest
 
-# MariaDB 11.4 daily dump (mariadb-dump)
- docker run --rm \
+# MariaDB 11.4 daily dump to S3 (mariadb-dump)
+docker run --rm \
   -e DB_TYPE=mariadb \
   -e MARIADB_VERSION=11.4 \
   -e DB_HOST=localhost \
@@ -116,8 +179,23 @@ Tools are installed at runtime (no version pinning).
   -e RETENTION_DAYS=7 \
   ghcr.io/cloudscript-technology/dumpscript:latest
 
-# MongoDB daily dump
- docker run --rm \
+# MySQL 5.7 daily dump to S3
+docker run --rm \
+  -e DB_TYPE=mysql \
+  -e MYSQL_VERSION=5.7 \
+  -e DB_HOST=localhost \
+  -e DB_USER=user \
+  -e DB_PASSWORD=password \
+  -e DB_NAME=mydb \
+  -e AWS_REGION=us-east-1 \
+  -e S3_BUCKET=my-backups \
+  -e S3_PREFIX=mysql57-dumps \
+  -e PERIODICITY=daily \
+  -e RETENTION_DAYS=7 \
+  ghcr.io/cloudscript-technology/dumpscript:latest
+
+# MongoDB daily dump to S3
+docker run --rm \
   -e DB_TYPE=mongodb \
   -e DB_HOST=localhost \
   -e DB_USER=user \
@@ -131,11 +209,85 @@ Tools are installed at runtime (no version pinning).
   -e PERIODICITY=daily \
   -e RETENTION_DAYS=7 \
   ghcr.io/cloudscript-technology/dumpscript:latest
+
+# S3-compatible storage (MinIO)
+docker run --rm \
+  -e DB_TYPE=postgresql \
+  -e POSTGRES_VERSION=16 \
+  -e DB_HOST=localhost \
+  -e DB_USER=user \
+  -e DB_PASSWORD=password \
+  -e DB_NAME=mydb \
+  -e AWS_ACCESS_KEY_ID=minioadmin \
+  -e AWS_SECRET_ACCESS_KEY=minioadmin \
+  -e AWS_REGION=us-east-1 \
+  -e AWS_S3_ENDPOINT_URL=http://minio:9000 \
+  -e S3_BUCKET=my-backups \
+  -e S3_PREFIX=postgresql-dumps \
+  -e PERIODICITY=daily \
+  -e RETENTION_DAYS=7 \
+  ghcr.io/cloudscript-technology/dumpscript:latest
 ```
 
-### Helm Chart Example
+#### Azure Blob Storage Backend
 
-#### Simple Configuration
+```bash
+# PostgreSQL 16 daily dump to Azure Blob Storage
+docker run --rm \
+  -e DB_TYPE=postgresql \
+  -e POSTGRES_VERSION=16 \
+  -e DB_HOST=localhost \
+  -e DB_USER=user \
+  -e DB_PASSWORD=password \
+  -e DB_NAME=mydb \
+  -e STORAGE_BACKEND=azure \
+  -e AZURE_STORAGE_ACCOUNT=mystorageaccount \
+  -e AZURE_STORAGE_KEY=mybase64encodedkey... \
+  -e AZURE_STORAGE_CONTAINER=db-backups \
+  -e AZURE_STORAGE_PREFIX=postgresql-dumps \
+  -e PERIODICITY=daily \
+  -e RETENTION_DAYS=7 \
+  ghcr.io/cloudscript-technology/dumpscript:latest
+
+# MySQL 8.0 daily dump to Azure Blob Storage (with SAS token)
+docker run --rm \
+  -e DB_TYPE=mysql \
+  -e MYSQL_VERSION=8.0 \
+  -e DB_HOST=localhost \
+  -e DB_USER=user \
+  -e DB_PASSWORD=password \
+  -e DB_NAME=mydb \
+  -e STORAGE_BACKEND=azure \
+  -e AZURE_STORAGE_ACCOUNT=mystorageaccount \
+  -e AZURE_STORAGE_SAS_TOKEN="sv=2021-06-08&ss=b&srt=sco&sp=rwdlac&se=2026-01-01T00:00:00Z&sig=..." \
+  -e AZURE_STORAGE_CONTAINER=db-backups \
+  -e AZURE_STORAGE_PREFIX=mysql-dumps \
+  -e PERIODICITY=daily \
+  -e RETENTION_DAYS=7 \
+  ghcr.io/cloudscript-technology/dumpscript:latest
+
+# MongoDB daily dump to Azure Blob Storage
+docker run --rm \
+  -e DB_TYPE=mongodb \
+  -e DB_HOST=localhost \
+  -e DB_USER=user \
+  -e DB_PASSWORD=password \
+  -e DB_NAME=mydb \
+  -e DB_PORT=27017 \
+  -e DUMP_OPTIONS="--authenticationDatabase=admin" \
+  -e STORAGE_BACKEND=azure \
+  -e AZURE_STORAGE_ACCOUNT=mystorageaccount \
+  -e AZURE_STORAGE_KEY=mybase64encodedkey... \
+  -e AZURE_STORAGE_CONTAINER=db-backups \
+  -e AZURE_STORAGE_PREFIX=mongodb-dumps \
+  -e PERIODICITY=daily \
+  -e RETENTION_DAYS=7 \
+  ghcr.io/cloudscript-technology/dumpscript:latest
+```
+
+### Helm Chart Examples
+
+#### S3 Backend (default)
 
 ```yaml
 databases:
@@ -159,7 +311,7 @@ databases:
       bucket: "my-db-backups"
       bucketPrefix: "postgresql/production"
     extraArgs: "--no-owner --no-acl"
-    
+
   - type: mariadb
     version: "11.4"  # Matches MariaDB server version
     periodicity:
@@ -172,13 +324,63 @@ databases:
     connectionInfo:
       host: "mariadb.example.com"
       username: "backup_user"
-      password: "secure_password"  
+      password: "secure_password"
       database: "app_db"
       port: 3306
     aws:
       region: "us-east-1"
       bucket: "my-db-backups"
       bucketPrefix: "mariadb/app"
+    extraArgs: "--single-transaction --routines"
+```
+
+#### Azure Blob Storage Backend
+
+```yaml
+databases:
+  - type: postgresql
+    version: "17"
+    periodicity:
+      - type: daily
+        retentionDays: 7
+        schedule: "0 2 * * *"
+      - type: weekly
+        retentionDays: 30
+        schedule: "0 3 * * 0"
+    connectionInfo:
+      host: "postgres.example.com"
+      username: "backup_user"
+      password: "secure_password"
+      database: "production_db"
+      port: 5432
+    storage:
+      backend: "azure"
+      azure:
+        storageAccount: "mystorageaccount"
+        storageKey: "mybase64encodedkey..."
+        container: "db-backups"
+        prefix: "postgresql/production"
+    extraArgs: "--no-owner --no-acl"
+
+  - type: mysql
+    version: "8.0"
+    periodicity:
+      - type: daily
+        retentionDays: 14
+        schedule: "0 1 * * *"
+    connectionInfo:
+      host: "mysql.example.com"
+      username: "backup_user"
+      password: "secure_password"
+      database: "app_db"
+      port: 3306
+    storage:
+      backend: "azure"
+      azure:
+        storageAccount: "mystorageaccount"
+        storageKey: "mybase64encodedkey..."
+        container: "db-backups"
+        prefix: "mysql/app"
     extraArgs: "--single-transaction --routines"
 ```
 
@@ -308,6 +510,48 @@ databases:
     extraArgs: "--clean --if-exists"
 ```
 
+#### Mixed Backends (S3 + Azure)
+
+```yaml
+databases:
+  # Production database on AWS → S3
+  - type: postgresql
+    version: "17"
+    periodicity:
+      - type: daily
+        retentionDays: 30
+        schedule: "0 1 * * *"
+    connectionInfo:
+      host: "prod-postgres.aws.example.com"
+      username: "backup_user"
+      password: "secure_password"
+      database: "production_db"
+    aws:
+      region: "us-east-1"
+      bucket: "aws-backups"
+      bucketPrefix: "production/postgres"
+
+  # Staging database on Azure → Azure Blob Storage
+  - type: postgresql
+    version: "16"
+    periodicity:
+      - type: daily
+        retentionDays: 14
+        schedule: "0 2 * * *"
+    connectionInfo:
+      host: "staging-postgres.azure.example.com"
+      username: "backup_user"
+      password: "secure_password"
+      database: "staging_db"
+    storage:
+      backend: "azure"
+      azure:
+        storageAccount: "mystorageaccount"
+        storageKey: "mybase64encodedkey..."
+        container: "azure-backups"
+        prefix: "staging/postgres"
+```
+
 ## Multiple Backup Schedules
 
 Each database can have multiple backup schedules with different retention policies:
@@ -344,18 +588,19 @@ notifications:
 3. **Version Verification**: The installation is verified and client version is logged
 4. **Database Operations**: The original dump/restore scripts are executed with the correct client version
 5. **Multiple Schedules**: Each database can have multiple backup schedules with different retention policies
-6. **S3 Path Structure**: The dump is uploaded to S3 at the path: `s3://$S3_BUCKET/$S3_PREFIX/$PERIODICITY/$YEAR/$MONTH/$DAY/$DUMP_FILE_GZ` (e.g., `daily`, `weekly`, `monthly`, `yearly`)
-7. **Notifications**: Optional Slack notifications for backup status
+6. **Storage Upload**: The dump is uploaded to the configured storage backend using [rclone](https://rclone.org/), which handles multipart uploads, retries, and chunked transfers automatically
+7. **Path Structure**: Backups are stored at `<prefix>/<periodicity>/<year>/<month>/<day>/<dump_file>` (e.g., `daily/2025/03/24/dump_20250324_120000.sql.gz`)
+8. **Notifications**: Optional Slack notifications for backup status
 
 ## Storage Requirements
 
-### ⚠️ Critical: Sufficient Storage in `/dumpscript` Directory
+### Critical: Sufficient Storage in `/dumpscript` Directory
 
-The DumpScript container uses the `/dumpscript` directory as its working directory and **temporary storage** for database dumps before uploading to S3. It is **critical** to ensure this directory has sufficient storage space to accommodate the full size of your database dump.
+The DumpScript container uses the `/dumpscript` directory as its working directory and **temporary storage** for database dumps before uploading. It is **critical** to ensure this directory has sufficient storage space to accommodate the full size of your database dump.
 
 #### Why Storage Space Matters
 
-- **Temporary Storage**: Database dumps are created locally in `/dumpscript` before being compressed and uploaded to S3
+- **Temporary Storage**: Database dumps are created locally in `/dumpscript` before being compressed and uploaded
 - **Compression Process**: The dump is compressed using gzip, which requires additional temporary space during compression
 - **No Streaming**: The current implementation creates the complete dump file locally before uploading (not streaming)
 - **Failure Risk**: Insufficient space will cause the backup process to fail with "No space left on device" errors
@@ -432,7 +677,7 @@ If you encounter storage-related failures:
 # Build dump image
 docker build -t dumpscript:latest -f docker/Dockerfile.dump .
 
-# Build restore image  
+# Build restore image
 docker build -t dumpscript-restore:latest -f docker/Dockerfile.restore .
 ```
 
@@ -442,6 +687,7 @@ docker build -t dumpscript-restore:latest -f docker/Dockerfile.restore .
 - `docker/Dockerfile.restore` - Restore container image
 - `docker/scripts/dump_db_to_s3.sh` - Database dump script
 - `docker/scripts/restore_db_from_s3.sh` - Database restore script
+- `docker/scripts/storage_utils.sh` - Unified storage abstraction (S3 and Azure Blob Storage)
 - `docker/scripts/install_db_clients.sh` - Dynamic client installation script
 - `docker/scripts/entrypoint_dump.sh` - Dump container entrypoint
 - `docker/scripts/entrypoint_restore.sh` - Restore container entrypoint
@@ -455,7 +701,7 @@ To allow DumpScript to upload, list, and delete backups in your S3 bucket, the I
 - `s3:PutObject` – Upload new backup files to S3
 - `s3:DeleteObject` – Remove old backups from S3 (for retention policy)
 - `s3:ListBucket` – List objects in the S3 bucket (for cleanup and restore)
-- `s3:ListObjects`, `s3:ListObjectsV2` – List objects within a bucket and support recursive listing (required for AWS CLI and scripts that use `aws s3 ls --recursive`)
+- `s3:ListObjects`, `s3:ListObjectsV2` – List objects within a bucket and support recursive listing
 
 Below is an example of a minimal IAM policy for S3 access:
 
@@ -485,21 +731,44 @@ Below is an example of a minimal IAM policy for S3 access:
 }
 ```
 
-Replace `your-bucket-name` with the actual name of your S3 bucket. Granting only these permissions ensures the tool can perform all backup, restore, and cleanup operations securely.
-# MySQL 5.7 daily dump
- docker run --rm \
-  -e DB_TYPE=mysql \
-  -e MYSQL_VERSION=5.7 \
-  -e DB_HOST=localhost \
-  -e DB_USER=user \
-  -e DB_PASSWORD=password \
-  -e DB_NAME=mydb \
-  -e AWS_REGION=us-east-1 \
-  -e S3_BUCKET=my-backups \
-  -e S3_PREFIX=mysql57-dumps \
-  -e PERIODICITY=daily \
-  -e RETENTION_DAYS=7 \
-  ghcr.io/cloudscript-technology/dumpscript:latest
+Replace `your-bucket-name` with the actual name of your S3 bucket.
+
+## Azure RBAC Requirements
+
+To allow DumpScript to upload, list, and delete backups in your Azure Blob Storage container, the identity (service principal, managed identity, or storage account key) must have the appropriate permissions.
+
+### Using Storage Account Key or SAS Token
+
+When using `AZURE_STORAGE_KEY`, full access is granted via the key itself — no additional RBAC configuration is needed.
+
+When using `AZURE_STORAGE_SAS_TOKEN`, ensure the token has the following permissions:
+- **Read** (`r`) – Download backup files for restore
+- **Write** (`w`) – Upload new backup files
+- **Delete** (`d`) – Remove old backups (retention policy)
+- **List** (`l`) – List blobs in the container
+
+### Using Azure RBAC (Workload Identity / Managed Identity)
+
+Assign the **Storage Blob Data Contributor** role to the identity at the storage account or container level:
+
+```bash
+az role assignment create \
+  --assignee "<principal-id>" \
+  --role "Storage Blob Data Contributor" \
+  --scope "/subscriptions/<sub-id>/resourceGroups/<rg>/providers/Microsoft.Storage/storageAccounts/<account>"
+```
+
+For Kubernetes with Azure Workload Identity, annotate the service account:
+
+```yaml
+serviceAccount:
+  create: true
+  annotations:
+    azure.workload.identity/client-id: "<azure-client-id>"
+```
+
+## Full Instance Dump and Restore
+
 ### Full instance dump (DB_NAME omitted)
 
 - `MySQL/MariaDB`: use `--all-databases` with `mysqldump`/`mariadb-dump`.

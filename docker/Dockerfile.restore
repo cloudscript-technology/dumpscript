@@ -8,6 +8,7 @@ RUN addgroup -S cloudscript && adduser -S dumpscript -G cloudscript
 # Install base dependencies and necessary tools
 RUN apk add --no-cache \
     aws-cli \
+    rclone \
     jq \
     gzip \
     bash \
@@ -23,12 +24,14 @@ LABEL org.opencontainers.image.title="dumpscript-restore" \
 COPY --chown=dumpscript:cloudscript ./scripts/restore_db_from_s3.sh /usr/local/bin/restore_db_from_s3.sh
 COPY --chown=dumpscript:cloudscript ./scripts/install_db_clients.sh /usr/local/bin/install_db_clients.sh
 COPY --chown=dumpscript:cloudscript ./scripts/entrypoint_restore.sh /usr/local/bin/entrypoint_restore.sh
+COPY --chown=dumpscript:cloudscript ./scripts/storage_utils.sh /usr/local/bin/storage_utils.sh
 COPY --chown=dumpscript:cloudscript ./scripts/aws_role_utils.sh /usr/local/bin/aws_role_utils.sh
 
 # Grant execution permissions
 RUN chmod +x /usr/local/bin/restore_db_from_s3.sh \
     && chmod +x /usr/local/bin/install_db_clients.sh \
     && chmod +x /usr/local/bin/entrypoint_restore.sh \
+    && chmod +x /usr/local/bin/storage_utils.sh \
     && chmod +x /usr/local/bin/aws_role_utils.sh
 
 # Ensure the /dumpscript directory has correct permissions

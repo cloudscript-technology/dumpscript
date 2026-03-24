@@ -6,6 +6,7 @@ WORKDIR /dumpscript
 # Install base dependencies and necessary tools
 RUN apk add --no-cache \
     aws-cli \
+    rclone \
     jq \
     gzip \
     bash \
@@ -25,6 +26,7 @@ COPY ./scripts/remove_old_backups.sh /usr/local/bin/remove_old_backups.sh
 COPY ./scripts/entrypoint_dump.sh /usr/local/bin/entrypoint_dump.sh
 COPY ./scripts/notify_slack.sh /usr/local/bin/notify_slack.sh
 COPY ./scripts/s3_upload_with_refresh.sh /usr/local/bin/s3_upload_with_refresh.sh
+COPY ./scripts/storage_utils.sh /usr/local/bin/storage_utils.sh
 COPY ./scripts/aws_role_utils.sh /usr/local/bin/aws_role_utils.sh
 
 # Grant execution permissions
@@ -34,12 +36,15 @@ RUN chmod +x /usr/local/bin/dump_db_to_s3.sh \
     && chmod +x /usr/local/bin/entrypoint_dump.sh \
     && chmod +x /usr/local/bin/notify_slack.sh \
     && chmod +x /usr/local/bin/s3_upload_with_refresh.sh \
+    && chmod +x /usr/local/bin/storage_utils.sh \
     && chmod +x /usr/local/bin/aws_role_utils.sh
 
 # Expects all variables to be set in the environment
 # DB_TYPE (mysql, mariadb, postgresql or mongodb), DB_HOST, DB_PORT, DB_USER, DB_PASSWORD
-# AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, AWS_ROLE_ARN, AWS_REGION, S3_BUCKET, S3_PREFIX, PERIODICITY
-# DUMP_OPTIONS (specific options for mysqldump, mariadb-dump or pg_dump)
+# STORAGE_BACKEND ("s3" or "azure", default: "s3")
+# S3 backend: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, AWS_ROLE_ARN, AWS_REGION, S3_BUCKET, S3_PREFIX
+# Azure backend: AZURE_STORAGE_ACCOUNT, AZURE_STORAGE_KEY or AZURE_STORAGE_SAS_TOKEN, AZURE_STORAGE_CONTAINER, AZURE_STORAGE_PREFIX
+# PERIODICITY, DUMP_OPTIONS (specific options for mysqldump, mariadb-dump or pg_dump)
 # SLACK_WEBHOOK_URL (optional), SLACK_CHANNEL (optional), SLACK_USERNAME (optional), SLACK_NOTIFY_SUCCESS (optional)
 
 ENTRYPOINT ["/usr/local/bin/entrypoint_dump.sh"]

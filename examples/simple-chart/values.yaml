@@ -9,6 +9,7 @@ dumpscript:
     tag: ""
 
   databases:
+  # Example: S3 backend (default)
   - type: postgresql
     version: "16"
     periodicity:
@@ -33,6 +34,29 @@ dumpscript:
       bucketPrefix: "my-database-name"
     extraArgs: "--format plain --encoding UTF8"
 
+  # Example: Azure Blob Storage backend
+  # - type: postgresql
+  #   version: "16"
+  #   periodicity:
+  #   - type: daily
+  #     retentionDays: 7
+  #     schedule: "0 1 * * *"
+  #   connectionInfo:
+  #     host: "my-host"
+  #     port: 5432
+  #     username: "my-username"
+  #     password: "my-password"
+  #     database: "my-database-name"
+  #   storage:
+  #     backend: "azure"
+  #     azure:
+  #       storageAccount: "mystorageaccount"
+  #       storageKey: "mybase64encodedkey..."  # or use secretName
+  #       # sasToken: "sv=2021-06-08&ss=b&..."  # alternative to storageKey
+  #       container: "db-backups"
+  #       prefix: "my-database-name"
+  #   extraArgs: "--format plain --encoding UTF8"
+
   notifications:
     slack:
       enabled: false
@@ -45,6 +69,9 @@ dumpscript:
     create: true
     automount: true
     annotations:
+      # S3 backend: use IRSA for AWS authentication
       eks.amazonaws.com/role-arn: "arn:aws:iam::<aws-account-id>:role/<role-name>"
+      # Azure backend: use Workload Identity for Azure authentication
+      # azure.workload.identity/client-id: "<azure-client-id>"
     name: "dumpscript"
     namespace: "dumpscript"
