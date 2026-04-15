@@ -128,6 +128,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
+            type=raw,value=alpine-edge
             type=raw,value=${{ needs.create-release.outputs.version }}-alpine-edge
             type=raw,value=${{ needs.create-release.outputs.tag }}-alpine-edge
 
