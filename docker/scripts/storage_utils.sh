@@ -86,6 +86,7 @@ _storage_rclone_flags() {
                 # Detectar GCS pelo endpoint
                 if echo "$AWS_S3_ENDPOINT_URL" | grep -q "googleapis.com"; then
                     provider="GCS"
+                    endpoint_flag="--s3-endpoint=$AWS_S3_ENDPOINT_URL --s3-no-check-bucket"
                 else
                     provider="Other"
                     endpoint_flag="--s3-endpoint=$AWS_S3_ENDPOINT_URL --s3-force-path-style=true"
