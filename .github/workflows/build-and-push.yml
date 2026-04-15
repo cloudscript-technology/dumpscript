@@ -122,6 +122,15 @@ jobs:
             type=raw,value=${{ needs.create-release.outputs.version }}-alpine-3-20
             type=raw,value=${{ needs.create-release.outputs.tag }}-alpine-3-20
 
+      - name: Extract metadata for Alpine edge
+        id: meta-alpine-edge
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ needs.create-release.outputs.version }}-alpine-edge
+            type=raw,value=${{ needs.create-release.outputs.tag }}-alpine-edge
+
       - name: Build and push Docker image to Alpine 3.21
         id: build_alpine_3_21
         uses: docker/build-push-action@v6
@@ -152,6 +161,21 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Build and push Docker image to Alpine edge
+        id: build_alpine_edge
+        uses: docker/build-push-action@v6
+        with:
+          context: ./docker
+          file: ./docker/Dockerfile.dump
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            ALPINE_VERSION=edge
+          tags: ${{ steps.meta-alpine-edge.outputs.tags }}
+          labels: ${{ steps.meta-alpine-edge.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: Generate artifact attestation for Alpine 3.21
         uses: actions/attest-build-provenance@v2
         with:
@@ -164,4 +188,11 @@ jobs:
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.build_alpine_3_20.outputs.digest }}
+          push-to-registry: true
+
+      - name: Generate artifact attestation for Alpine edge
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build_alpine_edge.outputs.digest }}
           push-to-registry: true

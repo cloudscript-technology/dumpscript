@@ -3,7 +3,7 @@ set -e
 
 # Script to install database clients dynamically
 # Based on environment variables:
-# - POSTGRES_VERSION: PostgreSQL client version (13, 14, 15, 16, 17)
+# - POSTGRES_VERSION: PostgreSQL client version (13, 14, 15, 16, 17, 18)
 # - MYSQL_VERSION: MySQL client version (8.0)
 # - MARIADB_VERSION: MariaDB client version (10.11, 11.4)
 # - MongoDB tools: installed without version pinning (mongodump, mongorestore)
@@ -31,13 +31,13 @@ install_postgresql_client() {
     echo "Installing PostgreSQL client version $version..."
     
     case "$version" in
-        "13"|"14"|"15"|"16"|"17")
+        "13"|"14"|"15"|"16"|"17"|"18")
             apk add --no-cache postgresql${version}-client
             echo "PostgreSQL client $version installed successfully"
             ;;
         *)
             echo "Error: Unsupported PostgreSQL version: $version"
-            echo "Supported versions: 13, 14, 15, 16, 17"
+            echo "Supported versions: 13, 14, 15, 16, 17, 18"
             exit 1
             ;;
     esac
