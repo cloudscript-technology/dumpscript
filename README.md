@@ -44,11 +44,12 @@ Example: `postgresql-dumps/daily/2025/03/24/dump_20250324_120000.sql.gz`
 ## Database Client Versions
 
 ### PostgreSQL
-Supported versions: `13`, `14`, `15`, `16`, `17`
+Supported versions: `13`, `14`, `15`, `16`, `17`, `18`
 
 **Version Availability by Alpine Base Image:**
 - **Alpine 3.20**: PostgreSQL versions `14`, `15`, `16`
 - **Alpine 3.21**: PostgreSQL versions `15`, `16`, `17`
+- **Alpine edge** (pinned): PostgreSQL versions `16`, `17`, `18`
 
 The client version should match your PostgreSQL server version to avoid compatibility issues like:
 ```
