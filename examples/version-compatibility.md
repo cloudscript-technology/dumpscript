@@ -83,6 +83,7 @@ The container will now:
 - `15` - For PostgreSQL 15.x servers
 - `16` - For PostgreSQL 16.x servers
 - `17` - For PostgreSQL 17.x servers
+- `18` - For PostgreSQL 18.x servers
 
 ### MySQL/MariaDB
 - `8.0` - For MySQL 8.0 servers
