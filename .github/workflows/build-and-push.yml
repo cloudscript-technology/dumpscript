@@ -171,7 +171,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           build-args: |
-            ALPINE_VERSION=edge
+            ALPINE_VERSION=edge@sha256:9a341ff2287c54b86425cbee0141114d811ae69d88a36019087be6d896cef241
           tags: ${{ steps.meta-alpine-edge.outputs.tags }}
           labels: ${{ steps.meta-alpine-edge.outputs.labels }}
           cache-from: type=gha
