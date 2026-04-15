@@ -85,6 +85,9 @@ _storage_rclone_flags() {
             if [ -n "$AWS_S3_ENDPOINT_URL" ]; then
                 # Detectar GCS pelo endpoint
                 if echo "$AWS_S3_ENDPOINT_URL" | grep -q "googleapis.com"; then
+                    # GCS via S3-compat (HMAC): provider=GCS respeita --s3-endpoint,
+                    # usa path-style por padrão e assinatura v4. --s3-no-check-bucket
+                    # evita CreateBucket (bucket já existe, namespace global do GCS).
                     provider="GCS"
                     endpoint_flag="--s3-endpoint=$AWS_S3_ENDPOINT_URL --s3-no-check-bucket"
                 else
