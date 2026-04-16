@@ -1,0 +1,13 @@
+{
+  "name": "dumpscript-tests",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test:gcs": "docker compose -f tests/gcs/docker-compose.yml --env-file tests/gcs/.env up --build --abort-on-container-exit --exit-code-from dumpscript",
+    "test:aws": "docker compose -f tests/aws/docker-compose.yml --env-file tests/aws/.env up --build --abort-on-container-exit --exit-code-from dumpscript",
+    "test:azure": "docker compose -f tests/azure/docker-compose.yml --env-file tests/azure/.env up --build --abort-on-container-exit --exit-code-from dumpscript",
+    "test:gcs:down": "docker compose -f tests/gcs/docker-compose.yml down -v",
+    "test:aws:down": "docker compose -f tests/aws/docker-compose.yml down -v",
+    "test:azure:down": "docker compose -f tests/azure/docker-compose.yml down -v"
+  }
+}

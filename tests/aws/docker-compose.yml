@@ -1,0 +1,43 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  dumpscript:
+    build:
+      context: ../../docker
+      dockerfile: Dockerfile.dump
+      args:
+        ALPINE_VERSION: edge
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      STORAGE_BACKEND: s3
+      AWS_REGION: ${AWS_REGION}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      S3_BUCKET: ${S3_BUCKET}
+      S3_PREFIX: ${S3_PREFIX}
+      S3_STORAGE_CLASS: ${S3_STORAGE_CLASS:-STANDARD_IA}
+      DB_TYPE: ${DB_TYPE}
+      POSTGRES_VERSION: ${POSTGRES_VERSION}
+      DB_HOST: postgres
+      DB_PORT: ${DB_PORT}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+      PERIODICITY: ${PERIODICITY:-daily}
+      RETENTION_DAYS: ${RETENTION_DAYS:-7}
+      DUMP_OPTIONS: ${DUMP_OPTIONS:---no-owner --format=custom}
