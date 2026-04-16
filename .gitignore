@@ -1,2 +1,3 @@
 .cursorignore
 web
+**/.env
