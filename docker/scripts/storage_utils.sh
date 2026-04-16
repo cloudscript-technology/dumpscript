@@ -131,7 +131,9 @@ _storage_upload_flags() {
             echo "--s3-upload-cutoff=$STORAGE_UPLOAD_CUTOFF"
             echo "--s3-chunk-size=$STORAGE_CHUNK_SIZE"
             echo "--s3-upload-concurrency=$STORAGE_UPLOAD_CONCURRENCY"
-            echo "--s3-storage-class=STANDARD_IA"
+            if [ -n "${S3_STORAGE_CLASS:-}" ]; then
+                echo "--s3-storage-class=${S3_STORAGE_CLASS}"
+            fi
             ;;
         azure)
             echo "--azureblob-upload-cutoff=$STORAGE_UPLOAD_CUTOFF"
