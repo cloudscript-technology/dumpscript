@@ -33,6 +33,7 @@ type StorageBackend string
 const (
 	BackendS3    StorageBackend = "s3"
 	BackendAzure StorageBackend = "azure"
+	BackendGCS   StorageBackend = "gcs"
 )
 
 type Periodicity string
@@ -82,6 +83,20 @@ type Azure struct {
 	// Used to target Azurite emulator or custom Azure government clouds.
 	// Example: http://azurite:10000/devstoreaccount1
 	Endpoint string `envconfig:"AZURE_STORAGE_ENDPOINT"`
+}
+
+// GCS native (Google Cloud Storage) — uses Application Default Credentials.
+// On GKE this means Workload Identity (no static keys); locally it uses
+// `gcloud auth application-default login` or GOOGLE_APPLICATION_CREDENTIALS.
+type GCS struct {
+	Bucket          string `envconfig:"GCS_BUCKET"`
+	Prefix          string `envconfig:"GCS_PREFIX"`
+	ProjectID       string `envconfig:"GCS_PROJECT_ID"`
+	CredentialsFile string `envconfig:"GCS_CREDENTIALS_FILE"`
+	// Endpoint overrides the default Google API URL — used to point at the
+	// fake-gcs-server emulator for local development and tests
+	// (e.g. http://localhost:4443/storage/v1/).
+	Endpoint string `envconfig:"GCS_ENDPOINT"`
 }
 
 type Upload struct {
@@ -138,6 +153,7 @@ type Config struct {
 	DB           DB
 	S3           S3
 	Azure        Azure
+	GCS          GCS
 	Upload       Upload
 	Slack        Slack
 	Discord      Discord
@@ -198,20 +214,31 @@ func (c *Config) applyDefaults() {
 	if c.Backend == BackendAzure && c.Azure.Prefix == "" {
 		c.Azure.Prefix = c.S3.Prefix
 	}
+	// Same convenience for GCS — let users keep `S3_PREFIX` from a previous
+	// backend and just flip STORAGE_BACKEND=gcs without re-keying everything.
+	if c.Backend == BackendGCS && c.GCS.Prefix == "" {
+		c.GCS.Prefix = c.S3.Prefix
+	}
 }
 
 // Container returns the bucket/container for the active backend.
 func (c *Config) Container() string {
-	if c.Backend == BackendAzure {
+	switch c.Backend {
+	case BackendAzure:
 		return c.Azure.Container
+	case BackendGCS:
+		return c.GCS.Bucket
 	}
 	return c.S3.Bucket
 }
 
 // Prefix returns the storage prefix for the active backend.
 func (c *Config) Prefix() string {
-	if c.Backend == BackendAzure {
+	switch c.Backend {
+	case BackendAzure:
 		return c.Azure.Prefix
+	case BackendGCS:
+		return c.GCS.Prefix
 	}
 	return c.S3.Prefix
 }
@@ -307,6 +334,13 @@ func (c *Config) validateBackend() error {
 		if c.Azure.Container == "" {
 			return errors.New("AZURE_STORAGE_CONTAINER required for azure backend")
 		}
+	case BackendGCS:
+		if c.GCS.Bucket == "" {
+			return errors.New("GCS_BUCKET required for gcs backend")
+		}
+		// No credentials check — Application Default Credentials resolves
+		// itself: GOOGLE_APPLICATION_CREDENTIALS file, gcloud auth, GKE
+		// Workload Identity, GCE metadata server, etc.
 	case "":
 		return errors.New("STORAGE_BACKEND is required")
 	default:

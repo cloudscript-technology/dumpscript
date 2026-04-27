@@ -1,0 +1,50 @@
+# MariaDB with every notifier channel active simultaneously.
+# A failure in one channel does not suppress the others — all errors are
+# joined and reported.
+#
+# Required Secrets in namespace `backups`:
+#   mariadb-creds       keys: username, password
+#   slack-webhook       keys: url
+#   discord-webhook     keys: url
+#   teams-webhook       keys: url
+#   pagerduty-webhook   keys: url, authHeader
+---
+apiVersion: dumpscript.cloudscript.com.br/v1alpha1
+kind: BackupSchedule
+metadata:
+  name: mariadb-prod-daily
+  namespace: backups
+spec:
+  schedule: "0 4 * * *"
+  periodicity: daily
+  retentionDays: 30
+
+  database:
+    type: mariadb
+    host: mariadb.prod.svc
+    name: app
+    credentialsSecretRef:
+      name: mariadb-creds
+    options: "--single-transaction --routines"
+
+  storage:
+    backend: s3
+    s3:
+      bucket: prod-backups
+      prefix: mariadb
+      region: us-east-1
+      roleARN: arn:aws:iam::123456789012:role/dumpscript-backup
+
+  notifications:
+    notifySuccess: true
+    slack:
+      webhookSecretRef: { name: slack-webhook,   key: url }
+      channel: "#database-alerts"
+    discord:
+      webhookSecretRef: { name: discord-webhook, key: url }
+    teams:
+      webhookSecretRef: { name: teams-webhook,   key: url }
+    webhook:
+      urlSecretRef:        { name: pagerduty-webhook, key: url }
+      authHeaderSecretRef: { name: pagerduty-webhook, key: authHeader }
+    stdout: true             # also dumps JSON event lines to pod stdout

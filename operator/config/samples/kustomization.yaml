@@ -1,0 +1,5 @@
+## Append samples of your project ##
+resources:
+- dumpscript_v1alpha1_backupschedule.yaml
+- dumpscript_v1alpha1_restore.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples

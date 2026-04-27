@@ -1,0 +1,40 @@
+# MongoDB Atlas restore — replays a dump into a target cluster.
+# `mongorestore` creates collections on demand, so `createDB: true` is
+# essentially a no-op for Mongo (kept for parity with other engines).
+#
+# Required Secrets:
+#   mongo-atlas-staging-creds    keys: username, password
+#                                (role `restore` or `dbOwner` on target db)
+#   slack-webhook                keys: url
+---
+apiVersion: dumpscript.cloudscript.com.br/v1alpha1
+kind: Restore
+metadata:
+  name: mongo-staging-restore-from-prod
+  namespace: backups
+spec:
+  sourceKey: mongo/daily/YYYY/MM/DD/dump_YYYYMMDD_HHMMSS.archive.gz
+  createDB: true
+  ttlSecondsAfterFinished: 3600
+
+  database:
+    type: mongodb
+    host: "mongodb+srv://cluster0-staging.example.mongodb.net"
+    name: app
+    credentialsSecretRef:
+      name: mongo-atlas-staging-creds
+    options: "--authenticationDatabase=admin"
+
+  storage:
+    backend: s3
+    s3:
+      bucket: prod-backups
+      prefix: mongo
+      region: us-east-1
+      roleARN: arn:aws:iam::123456789012:role/dumpscript-backup
+
+  notifications:
+    notifySuccess: true
+    slack:
+      webhookSecretRef: { name: slack-webhook, key: url }
+      channel: "#database-alerts"

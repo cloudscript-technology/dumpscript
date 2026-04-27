@@ -1,0 +1,23 @@
+apiVersion: dumpscript.cloudscript.com.br/v1alpha1
+kind: BackupSchedule
+metadata:
+  name: backupschedule-sample
+  labels:
+    app.kubernetes.io/name: dumpscript-operator
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  schedule: "0 2 * * *"
+  periodicity: daily
+  retentionDays: 7
+  database:
+    type: postgresql
+    host: postgres.default.svc
+    name: app
+    credentialsSecretRef:
+      name: postgres-creds
+  storage:
+    backend: s3
+    s3:
+      bucket: my-backups
+      prefix: pg
+      region: us-east-1

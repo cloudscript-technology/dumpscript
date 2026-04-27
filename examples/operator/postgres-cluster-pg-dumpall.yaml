@@ -1,0 +1,33 @@
+# Full-cluster PostgreSQL backup via `pg_dumpall`.
+# Triggered by leaving `database.name` empty — pg_dumpall captures every
+# database plus cluster-wide objects (roles, tablespaces).
+#
+# Required Secrets:
+#   pg-prod-creds    keys: username, password   (the user must be a superuser)
+---
+apiVersion: dumpscript.cloudscript.com.br/v1alpha1
+kind: BackupSchedule
+metadata:
+  name: pg-prod-cluster
+  namespace: backups
+spec:
+  schedule: "0 1 * * 0"          # weekly on Sunday 01:00 UTC
+  periodicity: weekly
+  retentionDays: 90
+
+  serviceAccountName: dumpscript-pg
+
+  database:
+    type: postgresql
+    host: pg.prod.svc
+    # name: <intentionally empty> — triggers pg_dumpall.
+    credentialsSecretRef:
+      name: pg-prod-creds
+
+  storage:
+    backend: s3
+    s3:
+      bucket: prod-backups
+      prefix: pg-cluster
+      region: us-east-1
+      roleARN: arn:aws:iam::123456789012:role/dumpscript-backup

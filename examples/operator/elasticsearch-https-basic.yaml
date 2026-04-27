@@ -1,0 +1,42 @@
+# Elasticsearch with TLS + basic auth → S3.
+# DumpScript ES engine is pure Go: scroll API → NDJSON; restore via _bulk.
+#
+# Required Secrets:
+#   es-creds         keys: username, password
+#   slack-webhook    keys: url
+#
+# Tip: for ApiKey/Bearer auth, drop `credentials` and put the auth header
+# in a Secret + reference it via `optionsFrom`. Example secret value:
+#   --auth-header=ApiKey AbC123==
+---
+apiVersion: dumpscript.cloudscript.com.br/v1alpha1
+kind: BackupSchedule
+metadata:
+  name: es-app-logs-daily
+  namespace: backups
+spec:
+  schedule: "0 2 * * *"
+  periodicity: daily
+  retentionDays: 14
+
+  database:
+    type: elasticsearch
+    host: elasticsearch.prod.svc
+    port: 9200
+    name: app-logs                # index to dump
+    credentialsSecretRef:
+      name: es-creds
+    options: "--scheme=https"
+
+  storage:
+    backend: s3
+    s3:
+      bucket: prod-backups
+      prefix: elasticsearch
+      region: us-east-1
+      roleARN: arn:aws:iam::123456789012:role/dumpscript-backup
+
+  notifications:
+    notifySuccess: false
+    slack:
+      webhookSecretRef: { name: slack-webhook, key: url }

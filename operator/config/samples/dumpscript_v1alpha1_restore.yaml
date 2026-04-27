@@ -1,0 +1,22 @@
+apiVersion: dumpscript.cloudscript.com.br/v1alpha1
+kind: Restore
+metadata:
+  name: restore-sample
+  labels:
+    app.kubernetes.io/name: dumpscript-operator
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  sourceKey: pg/daily/YYYY/MM/DD/dump_YYYYMMDD_HHMMSS.sql.gz
+  createDB: true
+  database:
+    type: postgresql
+    host: postgres.default.svc
+    name: app
+    credentialsSecretRef:
+      name: postgres-creds
+  storage:
+    backend: s3
+    s3:
+      bucket: my-backups
+      prefix: pg
+      region: us-east-1

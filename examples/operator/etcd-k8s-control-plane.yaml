@@ -1,0 +1,42 @@
+# etcd snapshot of the Kubernetes control plane.
+# Restore is intentionally unsupported by dumpscript — recovering a cluster
+# requires per-node `etcdctl snapshot restore --data-dir=...` with a fresh
+# `--initial-cluster-token`. See docs/engines/etcd.md for the procedure.
+#
+# Required Secrets:
+#   slack-webhook    keys: url
+#
+# This sample assumes an unauthenticated lab cluster. For mTLS-secured
+# etcd, mount the certs as a volume (operator volume support is a
+# follow-up) and pass `--cacert/--cert/--key` via `options`.
+---
+apiVersion: dumpscript.cloudscript.com.br/v1alpha1
+kind: BackupSchedule
+metadata:
+  name: etcd-snapshot-hourly
+  namespace: backups
+spec:
+  schedule: "0 * * * *"          # every hour — etcd snapshots are tiny
+  periodicity: daily
+  retentionDays: 30
+
+  database:
+    type: etcd
+    host: etcd.kube-system.svc
+    port: 2379
+    # Uncomment for TLS:
+    # options: "--scheme=https --cacert=/certs/ca.pem --cert=/certs/etcd.pem --key=/certs/etcd-key.pem"
+
+  storage:
+    backend: s3
+    s3:
+      bucket: prod-backups
+      prefix: etcd
+      region: us-east-1
+      roleARN: arn:aws:iam::123456789012:role/dumpscript-backup
+
+  notifications:
+    notifySuccess: true
+    slack:
+      webhookSecretRef: { name: slack-webhook, key: url }
+      channel: "#platform-alerts"

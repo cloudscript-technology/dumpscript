@@ -1,0 +1,37 @@
+# MongoDB Atlas → S3 via SRV connection string.
+#
+# Required Secrets:
+#   mongo-atlas-creds    keys: username, password   (must hold backup role)
+#   slack-webhook        keys: url
+---
+apiVersion: dumpscript.cloudscript.com.br/v1alpha1
+kind: BackupSchedule
+metadata:
+  name: mongo-atlas-daily
+  namespace: backups
+spec:
+  schedule: "0 5 * * *"
+  periodicity: daily
+  retentionDays: 21
+
+  database:
+    type: mongodb
+    host: "mongodb+srv://cluster0.example.mongodb.net"
+    name: app
+    credentialsSecretRef:
+      name: mongo-atlas-creds
+    options: "--authenticationDatabase=admin --readPreference=secondary"
+
+  storage:
+    backend: s3
+    s3:
+      bucket: prod-backups
+      prefix: mongo
+      region: us-east-1
+      roleARN: arn:aws:iam::123456789012:role/dumpscript-backup
+
+  notifications:
+    notifySuccess: false
+    slack:
+      webhookSecretRef: { name: slack-webhook, key: url }
+      channel: "#database-alerts"
