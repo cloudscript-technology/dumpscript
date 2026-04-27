@@ -24,10 +24,11 @@ func buildStorage(ctx context.Context, cfg *config.Config, log *slog.Logger) (st
 	return storage.New(ctx, cfg, log, opts)
 }
 
-// buildNotifier returns a SlackNotifier when configured, else a Noop.
+// buildNotifier delegates to the notify registry. Each notifier file
+// (slack.go, discord.go, teams.go, webhook.go, stdout.go, …) self-registers
+// in its init() and reports whether it is enabled for this Config. The
+// registry returns a Noop, a single notifier, or a Multi fan-out depending
+// on how many channels are active.
 func buildNotifier(cfg *config.Config, log *slog.Logger) notify.Notifier {
-	if cfg.Slack.WebhookURL == "" {
-		return notify.Noop{}
-	}
-	return notify.NewSlack(cfg, log)
+	return notify.New(cfg, log)
 }

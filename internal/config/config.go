@@ -97,6 +97,35 @@ type Slack struct {
 	NotifySuccess bool   `envconfig:"SLACK_NOTIFY_SUCCESS" default:"false"`
 }
 
+// Discord posts via an Incoming Webhook URL.
+type Discord struct {
+	WebhookURL    string `envconfig:"DISCORD_WEBHOOK_URL"`
+	Username      string `envconfig:"DISCORD_USERNAME"`
+	NotifySuccess bool   `envconfig:"DISCORD_NOTIFY_SUCCESS" default:"false"`
+}
+
+// Teams posts via a Microsoft Teams Incoming Webhook (legacy connector).
+type Teams struct {
+	WebhookURL    string `envconfig:"TEAMS_WEBHOOK_URL"`
+	NotifySuccess bool   `envconfig:"TEAMS_NOTIFY_SUCCESS" default:"false"`
+}
+
+// Webhook is a generic JSON POST receiver — any HTTP server that accepts
+// `application/json`. AuthHeader is the raw value of the Authorization
+// header sent on every request (e.g. `Bearer xxx`).
+type Webhook struct {
+	URL           string `envconfig:"WEBHOOK_URL"`
+	AuthHeader    string `envconfig:"WEBHOOK_AUTH_HEADER"`
+	NotifySuccess bool   `envconfig:"WEBHOOK_NOTIFY_SUCCESS" default:"false"`
+}
+
+// NotifyStdout emits each event as JSON on stdout — useful for log-based
+// downstream tooling (CI dashboards, fluent-bit, etc.).
+type NotifyStdout struct {
+	Enabled       bool `envconfig:"NOTIFY_STDOUT"         default:"false"`
+	NotifySuccess bool `envconfig:"NOTIFY_STDOUT_SUCCESS" default:"true"`
+}
+
 type Prometheus struct {
 	Enabled        bool   `envconfig:"PROMETHEUS_ENABLED"         default:"false"`
 	PushgatewayURL string `envconfig:"PROMETHEUS_PUSHGATEWAY_URL"`
@@ -106,12 +135,16 @@ type Prometheus struct {
 }
 
 type Config struct {
-	DB         DB
-	S3         S3
-	Azure      Azure
-	Upload     Upload
-	Slack      Slack
-	Prometheus Prometheus
+	DB           DB
+	S3           S3
+	Azure        Azure
+	Upload       Upload
+	Slack        Slack
+	Discord      Discord
+	Teams        Teams
+	Webhook      Webhook
+	NotifyStdout NotifyStdout
+	Prometheus   Prometheus
 
 	Backend        StorageBackend `envconfig:"STORAGE_BACKEND" default:"s3"`
 	Periodicity    Periodicity    `envconfig:"PERIODICITY"`

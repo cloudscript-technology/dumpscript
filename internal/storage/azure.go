@@ -61,16 +61,39 @@ func (a *Azure) Upload(ctx context.Context, localPath, key string) error {
 	}
 	defer f.Close()
 
+	fi, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("stat local: %w", err)
+	}
+	localSize := fi.Size()
+
 	chunk, err := parseSize(a.cfg.Upload.ChunkSize)
 	if err != nil {
 		return err
 	}
 
-	_, err = a.client.UploadFile(ctx, a.cfg.Azure.Container, key, f, &azblob.UploadFileOptions{
+	if _, err = a.client.UploadFile(ctx, a.cfg.Azure.Container, key, f, &azblob.UploadFileOptions{
 		BlockSize:   chunk,
 		Concurrency: uint16(a.cfg.Upload.Concurrency),
-	})
-	return err
+	}); err != nil {
+		return fmt.Errorf("azure upload: %w", err)
+	}
+
+	// Post-upload size sanity: catches truncated commits where the SDK
+	// returned success but the blob ended up shorter than the local source.
+	blobClient := a.client.ServiceClient().
+		NewContainerClient(a.cfg.Azure.Container).
+		NewBlobClient(key)
+	props, err := blobClient.GetProperties(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("azure verify properties: %w", err)
+	}
+	if props.ContentLength != nil && *props.ContentLength != localSize {
+		return fmt.Errorf("azure upload integrity check failed: local=%d remote=%d (key=%s)",
+			localSize, *props.ContentLength, key)
+	}
+	a.log.Debug("azure upload integrity verified", "key", key, "size", localSize)
+	return nil
 }
 
 func (a *Azure) UploadBytes(ctx context.Context, data []byte, key string) error {

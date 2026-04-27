@@ -14,6 +14,15 @@ import (
 	"github.com/cloudscript-technology/dumpscript/internal/config"
 )
 
+func init() {
+	Register("slack", func(cfg *config.Config, log *slog.Logger) (Notifier, bool) {
+		if cfg.Slack.WebhookURL == "" {
+			return nil, false
+		}
+		return NewSlack(cfg, log), true
+	})
+}
+
 // Slack is a Notifier that posts to a Slack incoming webhook.
 type Slack struct {
 	cfg  *config.Config

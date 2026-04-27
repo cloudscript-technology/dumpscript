@@ -117,16 +117,44 @@ func (s *S3) Upload(ctx context.Context, localPath, key string) error {
 	}
 	defer f.Close()
 
+	fi, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("stat local: %w", err)
+	}
+	localSize := fi.Size()
+
 	in := &s3.PutObjectInput{
 		Bucket: aws.String(s.cfg.S3.Bucket),
 		Key:    aws.String(key),
 		Body:   f,
+		// Server-side integrity: AWS computes SHA-256 of every part and
+		// rejects the upload if any byte was corrupted in transit.
+		ChecksumAlgorithm: s3types.ChecksumAlgorithmSha256,
 	}
 	if s.cfg.S3.StorageClass != "" {
 		in.StorageClass = s3types.StorageClass(s.cfg.S3.StorageClass)
 	}
-	_, err = s.uploader.Upload(ctx, in)
-	return err
+	if _, err = s.uploader.Upload(ctx, in); err != nil {
+		return fmt.Errorf("s3 upload: %w", err)
+	}
+
+	// Post-upload size sanity: catches the case where AWS accepted the parts
+	// but the final object ended up truncated (rare but observed under
+	// buggy proxies / aborted multipart sessions).
+	head, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(s.cfg.S3.Bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return fmt.Errorf("s3 verify head: %w", err)
+	}
+	if head.ContentLength != nil && *head.ContentLength != localSize {
+		return fmt.Errorf("s3 upload integrity check failed: local=%d remote=%d (key=%s)",
+			localSize, *head.ContentLength, key)
+	}
+	s.log.Debug("s3 upload integrity verified",
+		"key", key, "size", localSize, "checksum_alg", "SHA256")
+	return nil
 }
 
 func (s *S3) UploadBytes(ctx context.Context, data []byte, key string) error {
