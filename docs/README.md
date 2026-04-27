@@ -46,9 +46,19 @@ See [engines index](./engines/README.md) for the full matrix and picker.
 
 ## Storage backends
 
-- [Overview](./storage/README.md) — S3 vs Azure; key layout
-- [S3 (AWS / MinIO / GCS)](./storage/s3.md)
+- [Overview](./storage/README.md) — S3 vs Azure vs GCS; key layout
+- [S3 (AWS / MinIO / S3-compatible)](./storage/s3.md)
 - [Azure Blob (real cloud + Azurite)](./storage/azure.md)
+- [Google Cloud Storage (native + Workload Identity)](./storage/gcs.md)
+
+---
+
+## Kubernetes operator
+
+- [Operator overview](./operator/README.md) — CRDs `BackupSchedule` + `Restore`
+- [`BackupSchedule` reference](./operator/backupschedule.md) — full spec/status/lifecycle
+- [`Restore` reference](./operator/restore.md) — one-shot restore CR
+- [Secret refs catalog](./operator/secret-refs.md) — every `*SecretRef` field
 
 ---
 
@@ -56,8 +66,10 @@ See [engines index](./engines/README.md) for the full matrix and picker.
 
 - [Distributed locking](./features/locking.md) — day-level `.lock` object
 - [Content verification](./features/verification.md) — per-engine truncation detection
+- [Upload integrity check](./features/integrity.md) — post-upload SHA-256/CRC32C/size verification
 - [Retention](./features/retention.md) — age-based cleanup
-- [Slack notifications](./features/slack_notifications.md) — start/success/failure/skipped
+- [Notifiers](./features/notifiers.md) — Slack / Discord / Teams / Webhook / Stdout
+- [Slack notifications (deep-dive)](./features/slack_notifications.md) — start/success/failure/skipped
 - [Prometheus metrics](./features/prometheus.md) — Pushgateway + stderr
 - [Logging](./features/logging.md) — pretty console + JSON modes
 
@@ -74,7 +86,6 @@ See [engines index](./engines/README.md) for the full matrix and picker.
 ## Development
 
 - [Adding a new engine](./development/adding_an_engine.md)
-- [Design patterns](./development/design_patterns.md)
 
 ---
 
