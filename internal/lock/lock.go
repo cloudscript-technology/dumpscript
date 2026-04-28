@@ -114,12 +114,15 @@ func isStale(ctx context.Context, store storage.Storage, key string, grace time.
 	}
 	var prev Info
 	if err := json.Unmarshal(raw, &prev); err != nil {
-		// Lock content is malformed — treat as stale rather than blocking
-		// forever on a corrupted JSON.
-		return true, prev, nil
+		// Lock content is malformed (placeholder, hand-edited, partial
+		// upload). Fail closed: treat as a real lock we don't understand
+		// rather than overwriting — the caller will get ErrLocked. An
+		// operator can clear it manually after inspection.
+		return false, prev, nil
 	}
 	if prev.StartedAt.IsZero() {
-		return true, prev, nil
+		// No timestamp recorded → can't decide age → treat as fresh.
+		return false, prev, nil
 	}
 	return time.Since(prev.StartedAt) > grace, prev, nil
 }

@@ -217,22 +217,18 @@ func TestAcquireWithGrace_GraceZeroIsStrictMode(t *testing.T) {
 	}
 }
 
-func TestAcquireWithGrace_MalformedLockTreatedAsStale(t *testing.T) {
+func TestAcquireWithGrace_MalformedLockReturnsErrLocked(t *testing.T) {
 	st := &stubStorage{existsMap: map[string]bool{"lk": true}}
 	st.uploadedData = []byte("not-json{{{")
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	err := AcquireWithGrace(context.Background(), st, "lk", NewInfo("new"), 24*time.Hour, logger)
-	if err != nil {
-		t.Fatalf("malformed lock should be taken over, got err=%v", err)
+	if !errors.Is(err, ErrLocked) {
+		t.Fatalf("malformed lock should fail closed (ErrLocked), got %v", err)
 	}
-	// Verify the new lock content was written.
-	var got Info
-	if jsonErr := json.Unmarshal(st.uploadedData, &got); jsonErr != nil {
-		t.Fatal(jsonErr)
-	}
-	if got.ExecutionID != "new" {
-		t.Errorf("ExecutionID = %q, want new", got.ExecutionID)
+	// Verify we did NOT overwrite the malformed body.
+	if string(st.uploadedData) != "not-json{{{" {
+		t.Errorf("malformed lock should not be overwritten, got %q", st.uploadedData)
 	}
 }
 
