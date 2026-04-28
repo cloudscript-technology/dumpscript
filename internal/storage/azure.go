@@ -132,6 +132,16 @@ func (a *Azure) List(ctx context.Context, prefix string) ([]Object, error) {
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
 		if err != nil {
+			// Azurite (latest) returns 404 ContainerNotFound when listing an
+			// EMPTY container even after the container was created via a
+			// signed PUT. Real Azure correctly returns 200 + empty
+			// EnumerationResults. Treat 404 as "no blobs" so the dump
+			// pipeline's reachability preflight (which invokes List) doesn't
+			// abort spuriously. If the container is genuinely missing, the
+			// later UploadFile call will surface the error clearly.
+			if bloberror.HasCode(err, bloberror.ContainerNotFound) {
+				return out, nil
+			}
 			return nil, err
 		}
 		for _, b := range page.Segment.BlobItems {
