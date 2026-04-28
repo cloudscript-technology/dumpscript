@@ -16,8 +16,11 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-// portForwardProc holds the kubectl port-forward process so AfterSuite can kill it.
-var portForwardProc *exec.Cmd
+// portForwardProc holds the kubectl port-forward processes so AfterSuite can kill them.
+var (
+	portForwardProc    *exec.Cmd
+	gcsPortForwardProc *exec.Cmd
+)
 
 var _ = BeforeSuite(func() {
 	SetDefaultEventuallyTimeout(3 * time.Minute)
@@ -50,6 +53,10 @@ var _ = BeforeSuite(func() {
 	run("kubectl", "apply", "-f", filepath.Join(manifests, "postgres.yaml"), "-n", testNamespace)
 	run("kubectl", "rollout", "status", "deployment/postgres", "-n", testNamespace, "--timeout=120s")
 
+	By("deploying fake-gcs-server (GCS emulator)")
+	run("kubectl", "apply", "-f", filepath.Join(manifests, "fake-gcs.yaml"), "-n", testNamespace)
+	run("kubectl", "rollout", "status", "deployment/fake-gcs", "-n", testNamespace, "--timeout=120s")
+
 	By(fmt.Sprintf("port-forwarding LocalStack → localhost:%s", lsLocalPort))
 	portForwardProc = exec.Command("kubectl", "port-forward",
 		"svc/localstack", lsLocalPort+":4566",
@@ -61,6 +68,21 @@ var _ = BeforeSuite(func() {
 
 	By("waiting for LocalStack to be healthy")
 	waitForURL("http://localhost:"+lsLocalPort+"/_localstack/health", 2*time.Minute)
+
+	By(fmt.Sprintf("port-forwarding fake-gcs-server → localhost:%s", gcsLocalPort))
+	gcsPortForwardProc = exec.Command("kubectl", "port-forward",
+		"svc/fake-gcs", gcsLocalPort+":4443",
+		"-n", testNamespace)
+	gcsPortForwardProc.Env = podmanEnv()
+	gcsPortForwardProc.Stdout = io.Discard
+	gcsPortForwardProc.Stderr = io.Discard
+	Expect(gcsPortForwardProc.Start()).To(Succeed(), "failed to start fake-gcs port-forward")
+
+	By("waiting for fake-gcs-server to be healthy")
+	waitForURL("http://localhost:"+gcsLocalPort+"/storage/v1/b", 2*time.Minute)
+
+	By("creating GCS bucket via fake-gcs-server REST API")
+	createGCSBucket(gcsBucketName)
 
 	By("provisioning S3 bucket via Terragrunt")
 	runTerragrunt("apply", "-auto-approve")
@@ -123,10 +145,14 @@ var _ = AfterSuite(func() {
 	)
 	c.Run() //nolint:errcheck
 
-	By("stopping port-forward")
+	By("stopping port-forwards")
 	if portForwardProc != nil && portForwardProc.Process != nil {
 		portForwardProc.Process.Kill() //nolint:errcheck
 		portForwardProc.Wait()         //nolint:errcheck
+	}
+	if gcsPortForwardProc != nil && gcsPortForwardProc.Process != nil {
+		gcsPortForwardProc.Process.Kill() //nolint:errcheck
+		gcsPortForwardProc.Wait()         //nolint:errcheck
 	}
 
 	By("deleting kind cluster")

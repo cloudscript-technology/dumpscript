@@ -24,6 +24,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -72,29 +73,61 @@ func (r *RestoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			return ctrl.Result{}, fmt.Errorf("create restore job: %w", err)
 		}
 		log.Info("created restore job", "job", desired.Name)
-		now := metav1.Now()
-		restore.Status.Phase = dumpscriptv1alpha1.RestorePhasePending
-		restore.Status.JobName = desired.Name
-		restore.Status.StartedAt = &now
-		return ctrl.Result{}, r.Status().Update(ctx, &restore)
+		err := r.patchRestoreStatus(ctx, &restore, func(s *dumpscriptv1alpha1.RestoreStatus) {
+			now := metav1.Now()
+			s.Phase = dumpscriptv1alpha1.RestorePhasePending
+			s.JobName = desired.Name
+			s.StartedAt = &now
+		})
+		return ctrl.Result{}, err
 	case err != nil:
 		return ctrl.Result{}, fmt.Errorf("get restore job: %w", err)
 	}
 
 	// Reflect Job terminal state back to the Restore status.
-	switch {
-	case current.Status.Succeeded > 0:
-		restore.Status.Phase = dumpscriptv1alpha1.RestorePhaseSucceeded
-		restore.Status.CompletedAt = current.Status.CompletionTime
-		log.Info("restore succeeded", "job", current.Name)
-	case current.Status.Failed > 0:
-		restore.Status.Phase = dumpscriptv1alpha1.RestorePhaseFailed
-		restore.Status.Message = fmt.Sprintf("job %s failed after %d attempt(s)", current.Name, current.Status.Failed)
-		log.Info("restore failed", "job", current.Name)
-	case current.Status.Active > 0:
-		restore.Status.Phase = dumpscriptv1alpha1.RestorePhaseRunning
+	err = r.patchRestoreStatus(ctx, &restore, func(s *dumpscriptv1alpha1.RestoreStatus) {
+		switch {
+		case current.Status.Succeeded > 0:
+			s.Phase = dumpscriptv1alpha1.RestorePhaseSucceeded
+			s.CompletedAt = current.Status.CompletionTime
+		case current.Status.Failed > 0:
+			s.Phase = dumpscriptv1alpha1.RestorePhaseFailed
+			s.Message = fmt.Sprintf("job %s failed after %d attempt(s)", current.Name, current.Status.Failed)
+		case current.Status.Active > 0:
+			s.Phase = dumpscriptv1alpha1.RestorePhaseRunning
+		}
+	})
+	if err == nil {
+		switch restore.Status.Phase {
+		case dumpscriptv1alpha1.RestorePhaseSucceeded:
+			log.Info("restore succeeded", "job", current.Name)
+		case dumpscriptv1alpha1.RestorePhaseFailed:
+			log.Info("restore failed", "job", current.Name)
+		}
 	}
-	return ctrl.Result{}, r.Status().Update(ctx, &restore)
+	return ctrl.Result{}, err
+}
+
+// patchRestoreStatus refetches the Restore CR and applies the mutator to its
+// Status, retrying on resource-version conflicts. After success the in-memory
+// `dst` is overwritten with the latest version so callers see the final state.
+func (r *RestoreReconciler) patchRestoreStatus(
+	ctx context.Context,
+	dst *dumpscriptv1alpha1.Restore,
+	mutate func(*dumpscriptv1alpha1.RestoreStatus),
+) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var latest dumpscriptv1alpha1.Restore
+		if err := r.Get(ctx, client.ObjectKey{Name: dst.Name, Namespace: dst.Namespace}, &latest); err != nil {
+			return err
+		}
+		mutate(&latest.Status)
+		if err := r.Status().Update(ctx, &latest); err != nil {
+			return err
+		}
+		*dst = latest
+		return nil
+	})
 }
 
 // SetupWithManager registers the controller and watches owned Jobs so that

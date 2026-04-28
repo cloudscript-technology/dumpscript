@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -246,6 +247,51 @@ func seedS3Object(key string) {
 	defer resp.Body.Close()
 	Expect(resp.StatusCode).To(BeNumerically("<", 300),
 		"seed S3 object %q: HTTP %d", key, resp.StatusCode)
+}
+
+// createGCSBucket creates a bucket in fake-gcs-server via its REST API.
+// fake-gcs-server accepts unauthenticated requests on its emulator port.
+func createGCSBucket(name string) {
+	GinkgoHelper()
+	body := fmt.Sprintf(`{"name":%q}`, name)
+	url := "http://localhost:" + gcsLocalPort + "/storage/v1/b?project=test-project"
+	resp, err := http.Post(url, "application/json", strings.NewReader(body))
+	Expect(err).NotTo(HaveOccurred(), "fake-gcs-server bucket create POST failed")
+	defer resp.Body.Close()
+	// 200 = created, 409 = already exists (idempotent)
+	Expect(resp.StatusCode).To(BeNumerically("<", 410),
+		"create GCS bucket %q: HTTP %d", name, resp.StatusCode)
+}
+
+// gcsListResult is the minimal JSON shape of fake-gcs-server's "list objects".
+type gcsListResult struct {
+	Items []struct {
+		Name string `json:"name"`
+	} `json:"items"`
+}
+
+// listGCSObjects returns the names of all objects in the bucket via the
+// fake-gcs-server REST API (port-forwarded to the test host).
+func listGCSObjects(bucket string) ([]string, error) {
+	url := fmt.Sprintf("http://localhost:%s/storage/v1/b/%s/o", gcsLocalPort, bucket)
+	resp, err := http.Get(url) //nolint:noctx
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	var out gcsListResult
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("gcs list parse: %w\nbody: %s", err, string(body))
+	}
+	keys := make([]string, len(out.Items))
+	for i, it := range out.Items {
+		keys[i] = it.Name
+	}
+	return keys, nil
 }
 
 // irsaS3Storage returns a YAML fragment for an S3 storage block that uses

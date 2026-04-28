@@ -165,6 +165,11 @@ type GCSStorage struct {
 	Bucket    string `json:"bucket"`
 	Prefix    string `json:"prefix,omitempty"`
 	ProjectID string `json:"projectID,omitempty"`
+	// Endpoint — optional override for the GCS API URL. Used by the
+	// fake-gcs-server emulator for tests and for self-hosted GCS-compatible
+	// services. When set, authentication is disabled (the emulator accepts
+	// unauthenticated traffic). Leave empty in production.
+	Endpoint string `json:"endpoint,omitempty"`
 	// CredentialsSecretRef — optional override; mounts a Service Account JSON key
 	// as a read-only volume. Leave empty in GKE to use Workload Identity.
 	CredentialsSecretRef *GCSCredentialsSecretRef `json:"credentialsSecretRef,omitempty"`

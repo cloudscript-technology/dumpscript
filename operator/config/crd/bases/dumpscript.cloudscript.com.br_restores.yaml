@@ -330,6 +330,13 @@ spec:
                         required:
                         - name
                         type: object
+                      endpoint:
+                        description: |-
+                          Endpoint — optional override for the GCS API URL. Used by the
+                          fake-gcs-server emulator for tests and for self-hosted GCS-compatible
+                          services. When set, authentication is disabled (the emulator accepts
+                          unauthenticated traffic). Leave empty in production.
+                        type: string
                       prefix:
                         type: string
                       projectID:

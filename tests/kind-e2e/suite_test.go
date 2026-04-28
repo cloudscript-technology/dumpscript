@@ -29,6 +29,12 @@ const (
 	irsaRoleARN = "arn:aws:iam::000000000000:role/" + irsaRoleName
 	// LocalStack STS endpoint reachable from inside the kind cluster.
 	irsaSTSEndpoint = "http://localstack." + testNamespace + ".svc.cluster.local:4566"
+
+	// GCS — fake-gcs-server emulator deployed in the kind cluster.
+	gcsBucketName = "dumpscript-gcs-e2e"
+	gcsLocalPort  = "14443" // port-forward from fake-gcs-server :4443
+	// fake-gcs-server endpoint reachable from inside the kind cluster.
+	fakeGCSInCluster = "http://fake-gcs." + testNamespace + ".svc.cluster.local:4443"
 )
 
 var (

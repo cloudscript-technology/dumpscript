@@ -42,10 +42,21 @@ func NewGCS(ctx context.Context, cfg *config.Config, log *slog.Logger) (*GCS, er
 		opts = append(opts, option.WithCredentialsFile(cfg.GCS.CredentialsFile))
 	}
 	if cfg.GCS.Endpoint != "" {
-		// Used by tests / fake-gcs-server. Disabling auth here is OK because
-		// the emulator accepts unauthenticated traffic.
-		opts = append(opts, option.WithEndpoint(cfg.GCS.Endpoint))
-		opts = append(opts, option.WithoutAuthentication())
+		// fake-gcs-server / on-prem GCS-compatible emulator. The Go SDK has
+		// special-case handling for STORAGE_EMULATOR_HOST that routes ALL
+		// JSON API operations (List, Get, Insert, …) through the emulator
+		// and disables authentication automatically. option.WithEndpoint
+		// alone misses some paths (notably List).
+		//
+		// We accept either "host:port" or "http://host:port" — the SDK adds
+		// the scheme if missing.
+		host := cfg.GCS.Endpoint
+		if u, err := url.Parse(host); err == nil && u.Host != "" {
+			host = u.Host
+		}
+		_ = os.Setenv("STORAGE_EMULATOR_HOST", host)
+		// Skip option.WithEndpoint here — it conflicts with the emulator path
+		// in newer SDK versions. STORAGE_EMULATOR_HOST is sufficient.
 	}
 	client, err := storage.NewClient(ctx, opts...)
 	if err != nil {

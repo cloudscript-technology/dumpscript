@@ -24,12 +24,13 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	dumpscriptv1alpha1 "github.com/cloudscript-technology/dumpscript/operator/api/v1alpha1"
 )
@@ -93,6 +94,10 @@ func (r *BackupScheduleReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 // refreshStatus walks the Jobs owned by the managed CronJob and populates
 // LastScheduleTime / LastSuccessTime / LastFailureTime + CurrentRun.
+//
+// Uses retry-on-conflict to handle the race when another reconcile (or a
+// kubectl patch) modifies the BackupSchedule between our Get and Status Update.
+// Each attempt refetches the latest version so the patch applies cleanly.
 func (r *BackupScheduleReconciler) refreshStatus(ctx context.Context, bs *dumpscriptv1alpha1.BackupSchedule) error {
 	var jobs batchv1.JobList
 	if err := r.List(ctx, &jobs,
@@ -102,27 +107,34 @@ func (r *BackupScheduleReconciler) refreshStatus(ctx context.Context, bs *dumpsc
 		return fmt.Errorf("list jobs: %w", err)
 	}
 
-	bs.Status.CurrentRun = ""
-	for i := range jobs.Items {
-		j := &jobs.Items[i]
-		switch {
-		case j.Status.CompletionTime != nil &&
-			(bs.Status.LastSuccessTime == nil || j.Status.CompletionTime.After(bs.Status.LastSuccessTime.Time)):
-			bs.Status.LastSuccessTime = j.Status.CompletionTime
-		case j.Status.Failed > 0 &&
-			(bs.Status.LastFailureTime == nil || j.CreationTimestamp.After(bs.Status.LastFailureTime.Time)):
-			t := j.CreationTimestamp
-			bs.Status.LastFailureTime = &t
-		case j.Status.Active > 0:
-			bs.Status.CurrentRun = j.Name
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var latest dumpscriptv1alpha1.BackupSchedule
+		if err := r.Get(ctx, client.ObjectKey{Name: bs.Name, Namespace: bs.Namespace}, &latest); err != nil {
+			return err
 		}
-		if bs.Status.LastScheduleTime == nil ||
-			j.CreationTimestamp.After(bs.Status.LastScheduleTime.Time) {
-			t := j.CreationTimestamp
-			bs.Status.LastScheduleTime = &t
+
+		latest.Status.CurrentRun = ""
+		for i := range jobs.Items {
+			j := &jobs.Items[i]
+			switch {
+			case j.Status.CompletionTime != nil &&
+				(latest.Status.LastSuccessTime == nil || j.Status.CompletionTime.After(latest.Status.LastSuccessTime.Time)):
+				latest.Status.LastSuccessTime = j.Status.CompletionTime
+			case j.Status.Failed > 0 &&
+				(latest.Status.LastFailureTime == nil || j.CreationTimestamp.After(latest.Status.LastFailureTime.Time)):
+				t := j.CreationTimestamp
+				latest.Status.LastFailureTime = &t
+			case j.Status.Active > 0:
+				latest.Status.CurrentRun = j.Name
+			}
+			if latest.Status.LastScheduleTime == nil ||
+				j.CreationTimestamp.After(latest.Status.LastScheduleTime.Time) {
+				t := j.CreationTimestamp
+				latest.Status.LastScheduleTime = &t
+			}
 		}
-	}
-	return r.Status().Update(ctx, bs)
+		return r.Status().Update(ctx, &latest)
+	})
 }
 
 // SetupWithManager sets up the controller with the Manager.

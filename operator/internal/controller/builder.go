@@ -313,6 +313,9 @@ func storageEnv(s dumpscriptv1alpha1.StorageSpec) []corev1.EnvVar {
 		if s.GCS.ProjectID != "" {
 			env = append(env, corev1.EnvVar{Name: "GCS_PROJECT_ID", Value: s.GCS.ProjectID})
 		}
+		if s.GCS.Endpoint != "" {
+			env = append(env, corev1.EnvVar{Name: "GCS_ENDPOINT", Value: s.GCS.Endpoint})
+		}
 		// Workload Identity path: leave creds empty.
 		if c := s.GCS.CredentialsSecretRef; c != nil {
 			env = append(env, corev1.EnvVar{
