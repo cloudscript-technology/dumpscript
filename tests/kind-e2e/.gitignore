@@ -1,0 +1,6 @@
+# Terragrunt working files
+.terragrunt-cache/
+backend.tf
+
+# Generated during go mod tidy — commit go.sum instead
+# (intentionally NOT ignored so CI can verify reproducibility)

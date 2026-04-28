@@ -79,7 +79,7 @@ See [engines index](./engines/README.md) for the full matrix and picker.
 
 - [Kubernetes / CronJob](./operations/kubernetes.md) — recommended deployment
 - [Docker image](./operations/docker_image.md) — build flags, sizes, pinning
-- [Testing](./operations/testing.md) — unit + e2e workflows
+- [Testing](./operations/testing.md) — unit + e2e + kind e2e (operator + Terragrunt + restore)
 
 ---
 
@@ -100,3 +100,4 @@ See [engines index](./engines/README.md) for the full matrix and picker.
 | Deploy to EKS with IRSA | [Kubernetes guide](./operations/kubernetes.md) |
 | Understand why the lock never orphans forever | [Locking](./features/locking.md) |
 | Add a new database engine | [Adding an engine](./development/adding_an_engine.md) |
+| Run the full operator + restore e2e test | [Testing — Kind E2E](./operations/testing.md#kind-e2e-fluxo-completo-de-operador) |

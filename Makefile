@@ -119,6 +119,15 @@ e2e-one: ## Run a single e2e test. Usage: make e2e-one NAME=TestMongo
 	@if [ -z "$(NAME)" ]; then echo "error: set NAME=<TestName>"; exit 2; fi
 	$(GO) test -tags=e2e -v -count=1 -run "^$(NAME)$$" ./tests/e2e/...
 
+.PHONY: e2e-kind
+e2e-kind: ## Kind cluster e2e: spins up kind, operator, LocalStack (via Terragrunt) + PostgreSQL, tests full backup/restore flow.
+	cd tests/kind-e2e && \
+		PROJECT_ROOT=$(CURDIR) $(GO) test -v -tags=kind_e2e -count=1 -timeout=45m ./...
+
+.PHONY: e2e-kind-deps
+e2e-kind-deps: ## Download Go module deps for the kind e2e module (run once or when go.mod changes).
+	cd tests/kind-e2e && $(GO) mod tidy
+
 ##@ Housekeeping
 
 .PHONY: clean

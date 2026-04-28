@@ -154,6 +154,166 @@ locais do K8s — `make` os instala automaticamente em `operator/bin/`.
 
 ---
 
+## Kind E2E (fluxo completo de operador)
+
+Testa o fluxo de ponta a ponta num cluster Kubernetes real:
+
+```
+kind (cluster local) → operator → BackupSchedule CR → CronJob
+  → dumpscript Job → upload S3 (LocalStack via Terragrunt)
+  → Restore CR → Job → PostgreSQL restaurado → dados verificados
+```
+
+### Pré-requisitos
+
+| Ferramenta | Versão testada | Instalação |
+|---|---|---|
+| `kind` | v0.31+ | `nix profile add nixpkgs#kind` |
+| `kubectl` | v1.35+ | `nix profile add nixpkgs#kubectl` |
+| `docker` / `podman` | podman 5.7+ | geralmente pré-instalado |
+| `terragrunt` | v0.97+ | `nix profile add nixpkgs#terragrunt` |
+| `terraform` | v1.14+ | `nix profile add nixpkgs#terraform` |
+
+### Executar
+
+```sh
+# Primeira vez: baixar dependências Go do módulo isolado
+make e2e-kind-deps
+
+# Rodar o suite completo (~3-5 min)
+make e2e-kind
+```
+
+Com podman (sem Docker real):
+
+```sh
+KIND_EXPERIMENTAL_PROVIDER=podman \
+DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock" \
+make e2e-kind
+```
+
+> O `Makefile` detecta automaticamente se `docker` é um alias para `podman`
+> e injeta as variáveis corretas via `podmanEnv()` no código Go.
+
+### O que é testado
+
+| Spec | Verifica |
+|---|---|
+| `operator reconciles BackupSchedule → CronJob` | CR aplicada → controller cria CronJob com spec correta |
+| `manual Job trigger completes successfully` | `kubectl create job --from=cronjob/...` roda dumpscript até completion |
+| `backup object is present in S3` | Objeto `daily/YYYY/MM/DD/dump_*.sql.gz` existe no LocalStack |
+| `operator reconciles Restore → Job and data is recovered` | Restore CR → Job → tabela restaurada no PostgreSQL |
+
+### Arquitetura do ambiente
+
+```
+┌─────────────────────── kind cluster ───────────────────────┐
+│                                                             │
+│  dumpscript-e2e namespace                                   │
+│  ┌──────────┐   ┌──────────────────────────────────┐       │
+│  │ postgres │   │ localstack (S3 :4566)            │       │
+│  └──────────┘   └──────────────────────────────────┘       │
+│        ▲                  ▲                                 │
+│        │     dumpscript   │ AWS_S3_ENDPOINT_URL             │
+│        └────── Job ───────┘                                 │
+│                                                             │
+│  dumpscript-operator-system namespace                       │
+│  ┌────────────────────────────────────┐                     │
+│  │ operator (controller-manager pod) │                     │
+│  └────────────────────────────────────┘                     │
+└─────────────────────────────────────────────────────────────┘
+         │ port-forward :14566
+         ▼
+  host: terragrunt apply → aws_s3_bucket no LocalStack
+```
+
+### Infraestrutura como código (Terragrunt)
+
+O bucket S3 é provisionado pelo Terragrunt antes dos testes e destruído depois:
+
+```
+tests/kind-e2e/
+├── terragrunt.hcl        ← estado em /tmp; source = ./terraform
+└── terraform/
+    ├── main.tf           ← provider aws → LocalStack (path-style)
+    ├── variables.tf      ← bucket_name, localstack_endpoint
+    └── outputs.tf
+```
+
+O endpoint do LocalStack é passado via `TF_VAR_localstack_endpoint` apontando
+para o port-forward ativo (`http://localhost:14566`). Dentro do cluster, os
+Jobs usam `http://localstack.dumpscript-e2e.svc.cluster.local:4566`.
+
+### Troubleshooting
+
+**Locks esgotados no podman**
+
+```
+Error: allocating lock for new volume: allocation failed; exceeded num_locks
+```
+
+```sh
+podman volume prune -f
+podman container prune -f
+```
+
+**Imagem não encontrada no nó kind (ImagePullBackOff)**
+
+O carregamento usa `podman exec ctr images import` com prefixo `localhost/`.
+Confirme que a imagem existe localmente:
+
+```sh
+podman images | grep kind-e2e
+```
+
+**Cluster órfão de execução anterior**
+
+O `BeforeSuite` deleta automaticamente qualquer cluster `dumpscript-e2e`
+existente antes de criar um novo. Para limpeza manual:
+
+```sh
+kind delete cluster --name dumpscript-e2e
+```
+
+**Estado Terraform inconsistente**
+
+O `BeforeSuite` deleta `/tmp/dumpscript-kind-e2e.tfstate` antes de cada run.
+Se o `AfterSuite` não rodou (kill abrupto), delete manualmente:
+
+```sh
+rm -f /tmp/dumpscript-kind-e2e.tfstate*
+```
+
+---
+
+## CI
+
+Setup recomendado pra CI (GitHub Actions exemplo):
+
+```yaml
+- name: Unit tests
+  run: make test-race
+
+- name: E2E (engines, sem MySQL 5.7 que é lento amd64)
+  run: make e2e-engines
+
+- name: Kind E2E (operador + S3 + restore)
+  run: make e2e-kind
+
+- name: Cover report
+  run: make cover-html
+- uses: actions/upload-artifact@v4
+  with: { name: coverage, path: coverage.html }
+```
+
+Tempo médio de CI:
+- `make test-race`: ~30s
+- `make e2e-engines`: ~5min
+- `make e2e` completo: ~10min
+- `make e2e-kind`: ~3-5min
+
+---
+
 ## Back
 
 - [Docker image](./docker_image.md)

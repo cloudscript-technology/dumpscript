@@ -1,0 +1,193 @@
+//go:build kind_e2e
+
+package kinde2e_test
+
+import (
+	"encoding/xml"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"strings"
+	"time"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+)
+
+// run executes a command and fails the test on error.
+func run(name string, args ...string) {
+	GinkgoHelper()
+	out, err := cmd(name, args...).CombinedOutput()
+	Expect(err).NotTo(HaveOccurred(), "$ %s %s\n%s", name, strings.Join(args, " "), string(out))
+}
+
+// runIn executes a command in dir and fails the test on error.
+func runIn(dir, name string, args ...string) {
+	GinkgoHelper()
+	c := cmd(name, args...)
+	c.Dir = dir
+	out, err := c.CombinedOutput()
+	Expect(err).NotTo(HaveOccurred(), "$ %s %s (in %s)\n%s", name, strings.Join(args, " "), dir, string(out))
+}
+
+// runOutput executes a command and returns stdout+stderr trimmed.
+func runOutput(name string, args ...string) (string, error) {
+	out, err := cmd(name, args...).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("$ %s %s: %w\n%s", name, strings.Join(args, " "), err, string(out))
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// mustOutput executes a command and fails the test if it errors.
+func mustOutput(name string, args ...string) string {
+	GinkgoHelper()
+	out, err := runOutput(name, args...)
+	Expect(err).NotTo(HaveOccurred())
+	return out
+}
+
+func cmd(name string, args ...string) *exec.Cmd {
+	c := exec.Command(name, args...)
+	c.Env = podmanEnv()
+	return c
+}
+
+// podmanEnv returns os.Environ() extended with podman-as-docker variables so
+// that kind, docker build, and kind load all go through the podman socket.
+// When a real docker daemon is present these vars are benign.
+func podmanEnv() []string {
+	env := os.Environ()
+	// Only inject when docker binary is actually podman (version strings match).
+	dockerVer, _ := exec.Command("docker", "--version").Output()
+	podmanVer, _ := exec.Command("podman", "--version").Output()
+	if strings.Contains(string(dockerVer), "podman") ||
+		string(dockerVer) == string(podmanVer) ||
+		os.Getenv("KIND_EXPERIMENTAL_PROVIDER") == "podman" {
+		uid := fmt.Sprintf("%d", os.Getuid())
+		sock := fmt.Sprintf("unix:///run/user/%s/podman/podman.sock", uid)
+		env = appendIfMissing(env, "DOCKER_HOST", sock)
+		env = appendIfMissing(env, "KIND_EXPERIMENTAL_PROVIDER", "podman")
+	}
+	return env
+}
+
+func appendIfMissing(env []string, key, val string) []string {
+	prefix := key + "="
+	for _, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			return env // already set by caller
+		}
+	}
+	return append(env, prefix+val)
+}
+
+// requireTools fails the test if any of the given executables are not in PATH.
+func requireTools(tools ...string) {
+	GinkgoHelper()
+	for _, tool := range tools {
+		_, err := exec.LookPath(tool)
+		Expect(err).NotTo(HaveOccurred(), "required tool not found in PATH: %s — please install it before running kind e2e tests", tool)
+	}
+}
+
+// runTerragrunt runs terragrunt in the kind-e2e directory with the right env vars.
+func runTerragrunt(args ...string) {
+	GinkgoHelper()
+	c := exec.Command("terragrunt", args...)
+	c.Dir = kindE2EDir
+	c.Env = append(podmanEnv(),
+		"TF_VAR_localstack_endpoint=http://localhost:"+lsLocalPort,
+		"TF_VAR_bucket_name="+bucketName,
+	)
+	out, err := c.CombinedOutput()
+	Expect(err).NotTo(HaveOccurred(), "terragrunt %v failed:\n%s", args, string(out))
+}
+
+// waitForURL polls url until it returns a non-5xx response or timeout expires.
+func waitForURL(url string, timeout time.Duration) {
+	GinkgoHelper()
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(url) //nolint:noctx
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode < 500 {
+				return
+			}
+			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+		} else {
+			lastErr = err
+		}
+		time.Sleep(2 * time.Second)
+	}
+	Fail(fmt.Sprintf("URL %s not ready after %s: %v", url, timeout, lastErr))
+}
+
+// s3ListResult is a minimal S3 ListObjectsV2 XML response.
+type s3ListResult struct {
+	XMLName  xml.Name `xml:"ListBucketResult"`
+	Contents []struct {
+		Key string `xml:"Key"`
+	} `xml:"Contents"`
+}
+
+// listS3Objects returns the keys of all objects in bucket via the LocalStack HTTP API.
+func listS3Objects(bucket string) ([]string, error) {
+	url := fmt.Sprintf("http://localhost:%s/%s?list-type=2", lsLocalPort, bucket)
+	resp, err := http.Get(url) //nolint:noctx
+	if err != nil {
+		return nil, fmt.Errorf("list objects: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	var result s3ListResult
+	if err := xml.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("xml parse: %w\nbody: %s", err, string(body))
+	}
+	keys := make([]string, len(result.Contents))
+	for i, c := range result.Contents {
+		keys[i] = c.Key
+	}
+	return keys, nil
+}
+
+// applyManifest runs kubectl apply -f - with content as stdin.
+func applyManifest(content string) {
+	GinkgoHelper()
+	c := exec.Command("kubectl", "apply", "-f", "-")
+	c.Stdin = strings.NewReader(content)
+	out, err := c.CombinedOutput()
+	Expect(err).NotTo(HaveOccurred(), "kubectl apply failed:\n%s", string(out))
+}
+
+// kubectlExec runs a command inside a pod container and returns the trimmed output.
+func kubectlExec(namespace, pod, container string, command ...string) string {
+	GinkgoHelper()
+	args := append([]string{"exec", pod, "-n", namespace, "-c", container, "--"}, command...)
+	out, err := runOutput("kubectl", args...)
+	Expect(err).NotTo(HaveOccurred())
+	return out
+}
+
+// pgPodName returns the name of the first running postgres pod in testNamespace.
+func pgPodName() string {
+	GinkgoHelper()
+	return mustOutput("kubectl", "get", "pod",
+		"-l", "app=postgres",
+		"-n", testNamespace,
+		"-o", "jsonpath={.items[0].metadata.name}")
+}
+
+// psql runs a SQL statement via psql inside the postgres pod.
+func psql(sql string) string {
+	GinkgoHelper()
+	return kubectlExec(testNamespace, pgPodName(), "postgres",
+		"psql", "-U", "testuser", "-d", "testdb", "-t", "-c", sql)
+}
