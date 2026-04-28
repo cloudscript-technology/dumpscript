@@ -40,11 +40,59 @@ func New(cfg Config) *slog.Logger {
 		return slog.New(tint.NewHandler(w, &tint.Options{
 			Level:       lvl,
 			TimeFormat:  time.TimeOnly,
-			ReplaceAttr: humanize,
+			ReplaceAttr: chainAttrs(redactSensitive, humanize),
 		}))
 	default:
-		return slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{Level: lvl}))
+		return slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{
+			Level:       lvl,
+			ReplaceAttr: redactJSONAttr,
+		}))
 	}
+}
+
+// chainAttrs composes ReplaceAttr functions left-to-right.
+func chainAttrs(fns ...func([]string, slog.Attr) slog.Attr) func([]string, slog.Attr) slog.Attr {
+	return func(groups []string, a slog.Attr) slog.Attr {
+		for _, fn := range fns {
+			a = fn(groups, a)
+		}
+		return a
+	}
+}
+
+// redactSensitive masks any attr whose key looks sensitive (password, secret,
+// token, credential, *_key, api_key) replacing the value with [REDACTED].
+// Applied to both JSON and console outputs so a stray Info("...", "password",
+// pwd) call cannot leak credentials regardless of format.
+func redactSensitive(_ []string, a slog.Attr) slog.Attr {
+	if isSensitiveKey(a.Key) && a.Value.Kind() != slog.KindGroup {
+		return slog.Attr{Key: a.Key, Value: slog.StringValue("[REDACTED]")}
+	}
+	return a
+}
+
+// redactJSONAttr is the JSON handler's ReplaceAttr — slog.HandlerOptions only
+// accepts a single ReplaceAttr, so we wrap.
+func redactJSONAttr(groups []string, a slog.Attr) slog.Attr {
+	return redactSensitive(groups, a)
+}
+
+// isSensitiveKey returns true when the key matches a known credential-bearing
+// substring. Case-insensitive. Errs on the side of redacting — false positives
+// (a "secret_count" attr) are preferable to silently leaking a token.
+func isSensitiveKey(k string) bool {
+	lk := strings.ToLower(k)
+	for _, needle := range []string{
+		"password", "passwd", "secret", "token", "credential", "apikey",
+	} {
+		if strings.Contains(lk, needle) {
+			return true
+		}
+	}
+	if strings.HasSuffix(lk, "_key") || lk == "key" {
+		return true
+	}
+	return false
 }
 
 // ParseLevel maps a string to slog.Level, defaulting to Info.

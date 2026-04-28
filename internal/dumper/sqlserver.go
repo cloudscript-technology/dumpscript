@@ -40,6 +40,11 @@ func (s *SQLServer) Dump(ctx context.Context) (*Artifact, error) {
 	}
 
 	server := fmt.Sprintf("%s,%d", s.cfg.DB.Host, s.cfg.DB.Port)
+	// SECURITY NOTE: mssql-scripter does not support reading the password from
+	// an environment variable or config file, so it has to be passed via argv
+	// (-P). On a shared host this leaks via /proc/PID/cmdline. Recommended
+	// mitigation in production is to use SQL Server Azure AD/Managed Identity
+	// auth (out of scope for this dumper today).
 	args := NewArgBuilder().
 		Add("-S", server).
 		Add("-d", s.cfg.DB.Name).

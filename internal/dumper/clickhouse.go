@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -46,9 +47,8 @@ func (c *Clickhouse) Dump(ctx context.Context) (*Artifact, error) {
 	if c.cfg.DB.User != "" {
 		b.Add("--user", c.cfg.DB.User)
 	}
-	if c.cfg.DB.Password != "" {
-		b.Add("--password", c.cfg.DB.Password)
-	}
+	// Pass password via env (CLICKHOUSE_PASSWORD) instead of --password argv
+	// so it does not show up in /proc/PID/cmdline or `ps`.
 	b.AddRaw(c.cfg.DB.DumpOptions)
 	b.Add("--query", q)
 
@@ -56,5 +56,8 @@ func (c *Clickhouse) Dump(ctx context.Context) (*Artifact, error) {
 		"host", c.cfg.DB.Host, "port", c.cfg.DB.Port, "target", c.cfg.DB.Name, "out", out)
 
 	cmd := exec.CommandContext(ctx, "clickhouse-client", b.Build()...)
+	if c.cfg.DB.Password != "" {
+		cmd.Env = append(os.Environ(), "CLICKHOUSE_PASSWORD="+c.cfg.DB.Password)
+	}
 	return runDumpWithGzip(cmd, out, ext)
 }
