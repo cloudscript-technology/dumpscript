@@ -21,9 +21,12 @@ import (
 	"fmt"
 
 	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -36,8 +39,18 @@ import (
 // RestoreReconciler reconciles a Restore object.
 type RestoreReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 }
+
+// Condition types and reasons emitted on Restore.status.conditions[].
+const (
+	RestoreConditionReady  = "Ready"
+	RestoreReasonRunning   = "RestoreRunning"
+	RestoreReasonSucceeded = "RestoreSucceeded"
+	RestoreReasonFailed    = "RestoreFailed"
+	RestoreReasonJobError  = "RestoreJobError"
+)
 
 // +kubebuilder:rbac:groups=dumpscript.cloudscript.com.br,resources=restores,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=dumpscript.cloudscript.com.br,resources=restores/status,verbs=get;update;patch
@@ -70,42 +83,112 @@ func (r *RestoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	switch {
 	case apierrors.IsNotFound(err):
 		if err := r.Create(ctx, desired); err != nil {
+			r.eventf(&restore, corev1.EventTypeWarning, RestoreReasonJobError, "failed to create restore Job: %v", err)
 			return ctrl.Result{}, fmt.Errorf("create restore job: %w", err)
 		}
 		log.Info("created restore job", "job", desired.Name)
+		r.eventf(&restore, corev1.EventTypeNormal, RestoreReasonRunning, "created restore Job %s", desired.Name)
 		err := r.patchRestoreStatus(ctx, &restore, func(s *dumpscriptv1alpha1.RestoreStatus) {
 			now := metav1.Now()
 			s.Phase = dumpscriptv1alpha1.RestorePhasePending
 			s.JobName = desired.Name
 			s.StartedAt = &now
+			setRestoreReadyCondition(s, restore.Generation)
 		})
 		return ctrl.Result{}, err
 	case err != nil:
 		return ctrl.Result{}, fmt.Errorf("get restore job: %w", err)
 	}
 
+	prevPhase := restore.Status.Phase
+
 	// Reflect Job terminal state back to the Restore status.
 	err = r.patchRestoreStatus(ctx, &restore, func(s *dumpscriptv1alpha1.RestoreStatus) {
+		s.ObservedGeneration = restore.Generation
 		switch {
 		case current.Status.Succeeded > 0:
 			s.Phase = dumpscriptv1alpha1.RestorePhaseSucceeded
 			s.CompletedAt = current.Status.CompletionTime
+			s.DurationSeconds = int64(jobDuration(current))
+			s.Message = fmt.Sprintf("restore from %s completed successfully", restore.Spec.SourceKey)
 		case current.Status.Failed > 0:
 			s.Phase = dumpscriptv1alpha1.RestorePhaseFailed
-			s.Message = fmt.Sprintf("job %s failed after %d attempt(s)", current.Name, current.Status.Failed)
+			s.CompletedAt = lastJobConditionTime(current, batchv1.JobFailed)
+			s.DurationSeconds = int64(jobDuration(current))
+			s.Message = fmt.Sprintf("job %s failed after %d attempt(s) — see pod logs", current.Name, current.Status.Failed)
 		case current.Status.Active > 0:
 			s.Phase = dumpscriptv1alpha1.RestorePhaseRunning
 		}
+		setRestoreReadyCondition(s, restore.Generation)
 	})
-	if err == nil {
+	if err == nil && restore.Status.Phase != prevPhase {
+		engine := restore.Spec.Database.Type
 		switch restore.Status.Phase {
 		case dumpscriptv1alpha1.RestorePhaseSucceeded:
 			log.Info("restore succeeded", "job", current.Name)
+			r.eventf(&restore, corev1.EventTypeNormal, RestoreReasonSucceeded,
+				"restore Job %s completed successfully", current.Name)
+			RestoreTotal.WithLabelValues(restore.Namespace, restore.Name, engine, "success").Inc()
+			if d := jobDuration(current); d > 0 {
+				RestoreDurationSeconds.WithLabelValues(restore.Namespace, restore.Name, engine, "success").Observe(d)
+			}
 		case dumpscriptv1alpha1.RestorePhaseFailed:
 			log.Info("restore failed", "job", current.Name)
+			r.eventf(&restore, corev1.EventTypeWarning, RestoreReasonFailed,
+				"restore Job %s failed (attempts=%d)", current.Name, current.Status.Failed)
+			RestoreTotal.WithLabelValues(restore.Namespace, restore.Name, engine, "failure").Inc()
+			if d := jobDuration(current); d > 0 {
+				RestoreDurationSeconds.WithLabelValues(restore.Namespace, restore.Name, engine, "failure").Observe(d)
+			}
 		}
 	}
 	return ctrl.Result{}, err
+}
+
+// eventf records a Kubernetes Event on the Restore object. No-op when the
+// recorder is not wired (unit tests, etc.).
+func (r *RestoreReconciler) eventf(restore *dumpscriptv1alpha1.Restore, eventType, reason, format string, args ...interface{}) {
+	if r.Recorder == nil {
+		return
+	}
+	r.Recorder.Eventf(restore, eventType, reason, format, args...)
+}
+
+// setRestoreReadyCondition mirrors the BackupSchedule Ready condition pattern:
+// True when phase=Succeeded, False when phase=Failed, Unknown otherwise.
+func setRestoreReadyCondition(s *dumpscriptv1alpha1.RestoreStatus, generation int64) {
+	cond := metav1.Condition{
+		Type:               RestoreConditionReady,
+		ObservedGeneration: generation,
+		LastTransitionTime: metav1.Now(),
+	}
+	switch s.Phase {
+	case dumpscriptv1alpha1.RestorePhaseSucceeded:
+		cond.Status = metav1.ConditionTrue
+		cond.Reason = RestoreReasonSucceeded
+		cond.Message = s.Message
+	case dumpscriptv1alpha1.RestorePhaseFailed:
+		cond.Status = metav1.ConditionFalse
+		cond.Reason = RestoreReasonFailed
+		cond.Message = s.Message
+	default:
+		cond.Status = metav1.ConditionUnknown
+		cond.Reason = RestoreReasonRunning
+		cond.Message = "restore is in progress"
+	}
+	apimeta.SetStatusCondition(&s.Conditions, cond)
+}
+
+// lastJobConditionTime returns the LastTransitionTime of the most recent
+// matching condition on a Job, or nil when none is found.
+func lastJobConditionTime(j *batchv1.Job, t batchv1.JobConditionType) *metav1.Time {
+	for i := range j.Status.Conditions {
+		c := &j.Status.Conditions[i]
+		if c.Type == t && c.Status == corev1.ConditionTrue {
+			return &c.LastTransitionTime
+		}
+	}
+	return nil
 }
 
 // patchRestoreStatus refetches the Restore CR and applies the mutator to its

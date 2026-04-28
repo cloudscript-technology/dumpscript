@@ -51,7 +51,21 @@ var _ = Describe("Restore Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: dumpscriptv1alpha1.RestoreSpec{
+						SourceKey: "test/dump.sql.gz",
+						Database: dumpscriptv1alpha1.DatabaseSpec{
+							Type: "postgresql",
+							Host: "postgres.default.svc.cluster.local",
+							Name: "testdb",
+						},
+						Storage: dumpscriptv1alpha1.StorageSpec{
+							Backend: "s3",
+							S3: &dumpscriptv1alpha1.S3Storage{
+								Bucket: "test-bucket",
+								Region: "us-east-1",
+							},
+						},
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
