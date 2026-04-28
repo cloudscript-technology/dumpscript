@@ -183,8 +183,14 @@ func kubectlExec(namespace, pod, container string, command ...string) string {
 // pgPodName returns the name of the first running postgres pod in testNamespace.
 func pgPodName() string {
 	GinkgoHelper()
+	return podByApp("postgres")
+}
+
+// podByApp returns the name of the first pod matching `app=<label>` in testNamespace.
+func podByApp(label string) string {
+	GinkgoHelper()
 	return mustOutput("kubectl", "get", "pod",
-		"-l", "app=postgres",
+		"-l", "app="+label,
 		"-n", testNamespace,
 		"-o", "jsonpath={.items[0].metadata.name}")
 }
@@ -294,6 +300,57 @@ func listGCSObjects(bucket string) ([]string, error) {
 	return keys, nil
 }
 
+// azureConnStr returns the Azure Storage connection string targeting the
+// port-forwarded Azurite endpoint on the test host.
+func azureConnStr() string {
+	return fmt.Sprintf(
+		"DefaultEndpointsProtocol=http;AccountName=%s;AccountKey=%s;BlobEndpoint=http://localhost:%s/%s;",
+		azureAccount, azuriteKey, azureLocalPort, azureAccount)
+}
+
+// runAzureCLI invokes the az CLI on the test host (talking to Azurite via the
+// port-forward) using the connection string. Handles SharedKey auth internally.
+// Idempotent for "create" operations: ignores AlreadyExists / ResourceExists.
+func runAzureCLI(args ...string) (string, error) {
+	c := exec.Command("az", args...)
+	c.Env = append(podmanEnv(), "AZURE_STORAGE_CONNECTION_STRING="+azureConnStr())
+	out, err := c.CombinedOutput()
+	if err != nil {
+		s := string(out)
+		if strings.Contains(s, "ContainerAlreadyExists") ||
+			strings.Contains(s, "ResourceAlreadyExists") {
+			return s, nil
+		}
+		return s, fmt.Errorf("az %v: %w\n%s", args, err, s)
+	}
+	return string(out), nil
+}
+
+// createAzureContainer creates a blob container in Azurite via the az CLI on
+// the test host (port-forwarded). az handles the SharedKey signature.
+func createAzureContainer(name string) {
+	GinkgoHelper()
+	out, err := runAzureCLI("storage", "container", "create", "--name", name)
+	Expect(err).NotTo(HaveOccurred(), "create Azure container %q:\n%s", name, out)
+}
+
+// listAzureBlobs returns the names of all blobs in the container via az CLI
+// on the test host (port-forwarded to Azurite).
+func listAzureBlobs(container string) ([]string, error) {
+	out, err := runAzureCLI("storage", "blob", "list",
+		"--container-name", container,
+		"--query", "[].name",
+		"--output", "tsv")
+	if err != nil {
+		return nil, err
+	}
+	out = strings.TrimSpace(out)
+	if out == "" {
+		return []string{}, nil
+	}
+	return strings.Split(out, "\n"), nil
+}
+
 // irsaS3Storage returns a YAML fragment for an S3 storage block that uses
 // IRSA (ServiceAccount token) instead of static credentialsSecretRef.
 // The dumpscript pod will call LocalStack STS to exchange the projected SA
@@ -315,4 +372,47 @@ func psql(sql string) string {
 	GinkgoHelper()
 	return kubectlExec(testNamespace, pgPodName(), "postgres",
 		"psql", "-U", "testuser", "-d", "testdb", "-t", "-c", sql)
+}
+
+// mysqlExec runs a SQL statement via the mysql client inside the mysql pod.
+func mysqlExec(sql string) string {
+	GinkgoHelper()
+	return kubectlExec(testNamespace, podByApp("mysql"), "mysql",
+		"mysql", "-u", "testuser", "-ptestpassword", "testdb",
+		"--skip-column-names", "-e", sql)
+}
+
+// mariadbExec runs a SQL statement via the mariadb client inside the mariadb pod.
+func mariadbExec(sql string) string {
+	GinkgoHelper()
+	return kubectlExec(testNamespace, podByApp("mariadb"), "mariadb",
+		"mariadb", "-u", "testuser", "-ptestpassword", "testdb",
+		"--skip-column-names", "-e", sql)
+}
+
+// mongoEval runs JavaScript via mongosh inside the mongodb pod, authenticating
+// against the admin database with the root credentials seeded by the manifest.
+func mongoEval(js string) string {
+	GinkgoHelper()
+	return kubectlExec(testNamespace, podByApp("mongodb"), "mongodb",
+		"mongosh", "--quiet",
+		"--username", "testuser",
+		"--password", "testpassword",
+		"--authenticationDatabase", "admin",
+		"testdb",
+		"--eval", js)
+}
+
+// redisCmd runs a redis-cli command inside the redis pod and returns the output.
+func redisCmd(args ...string) string {
+	GinkgoHelper()
+	full := append([]string{"redis-cli"}, args...)
+	return kubectlExec(testNamespace, podByApp("redis"), "redis", full...)
+}
+
+// etcdctl runs an etcdctl command inside the etcd pod and returns the output.
+func etcdctl(args ...string) string {
+	GinkgoHelper()
+	full := append([]string{"etcdctl", "--endpoints=http://localhost:2379"}, args...)
+	return kubectlExec(testNamespace, podByApp("etcd"), "etcd", full...)
 }

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,8 +19,9 @@ import (
 
 // portForwardProc holds the kubectl port-forward processes so AfterSuite can kill them.
 var (
-	portForwardProc    *exec.Cmd
-	gcsPortForwardProc *exec.Cmd
+	portForwardProc      *exec.Cmd
+	gcsPortForwardProc   *exec.Cmd
+	azurePortForwardProc *exec.Cmd
 )
 
 var _ = BeforeSuite(func() {
@@ -27,7 +29,7 @@ var _ = BeforeSuite(func() {
 	SetDefaultEventuallyPollingInterval(3 * time.Second)
 
 	By("checking required tools")
-	requireTools("kind", "kubectl", "docker", "terragrunt", "aws")
+	requireTools("kind", "kubectl", "docker", "terragrunt", "aws", "az")
 
 	By("cleaning up any leftover kind cluster from a previous run")
 	exec.Command("kind", "delete", "cluster", "--name", clusterName).Run() //nolint:errcheck
@@ -51,11 +53,24 @@ var _ = BeforeSuite(func() {
 
 	By("deploying PostgreSQL")
 	run("kubectl", "apply", "-f", filepath.Join(manifests, "postgres.yaml"), "-n", testNamespace)
-	run("kubectl", "rollout", "status", "deployment/postgres", "-n", testNamespace, "--timeout=120s")
+
+	By("deploying MySQL, MariaDB, MongoDB, Redis, etcd")
+	for _, f := range []string{"mysql.yaml", "mariadb.yaml", "mongodb.yaml", "redis.yaml", "etcd.yaml"} {
+		run("kubectl", "apply", "-f", filepath.Join(manifests, f), "-n", testNamespace)
+	}
+
+	// Wait for all DB rollouts together so they roll out in parallel.
+	for _, dep := range []string{"postgres", "mysql", "mariadb", "mongodb", "redis", "etcd"} {
+		run("kubectl", "rollout", "status", "deployment/"+dep, "-n", testNamespace, "--timeout=180s")
+	}
 
 	By("deploying fake-gcs-server (GCS emulator)")
 	run("kubectl", "apply", "-f", filepath.Join(manifests, "fake-gcs.yaml"), "-n", testNamespace)
 	run("kubectl", "rollout", "status", "deployment/fake-gcs", "-n", testNamespace, "--timeout=120s")
+
+	By("deploying Azurite (Azure Blob emulator)")
+	run("kubectl", "apply", "-f", filepath.Join(manifests, "azurite.yaml"), "-n", testNamespace)
+	run("kubectl", "rollout", "status", "deployment/azurite", "-n", testNamespace, "--timeout=120s")
 
 	By(fmt.Sprintf("port-forwarding LocalStack → localhost:%s", lsLocalPort))
 	portForwardProc = exec.Command("kubectl", "port-forward",
@@ -83,6 +98,30 @@ var _ = BeforeSuite(func() {
 
 	By("creating GCS bucket via fake-gcs-server REST API")
 	createGCSBucket(gcsBucketName)
+
+	By(fmt.Sprintf("port-forwarding Azurite → localhost:%s", azureLocalPort))
+	azurePortForwardProc = exec.Command("kubectl", "port-forward",
+		"svc/azurite", azureLocalPort+":10000",
+		"-n", testNamespace)
+	azurePortForwardProc.Env = podmanEnv()
+	azurePortForwardProc.Stdout = io.Discard
+	azurePortForwardProc.Stderr = io.Discard
+	Expect(azurePortForwardProc.Start()).To(Succeed(), "failed to start azurite port-forward")
+
+	By("waiting for Azurite TCP to be reachable")
+	// Azurite returns 400 for unauthenticated GETs, so we use a TCP probe via
+	// a quick HTTP HEAD that we expect to fail with 4xx (not connection refused).
+	Eventually(func() error {
+		resp, err := http.Head("http://localhost:" + azureLocalPort + "/")
+		if err != nil {
+			return err
+		}
+		resp.Body.Close()
+		return nil
+	}, 2*time.Minute, 2*time.Second).Should(Succeed())
+
+	By("creating Azure container via Shared Key REST API")
+	createAzureContainer(azureContainer)
 
 	By("provisioning S3 bucket via Terragrunt")
 	runTerragrunt("apply", "-auto-approve")
@@ -132,6 +171,19 @@ var _ = BeforeSuite(func() {
 		"--from-literal=username=testuser",
 		"--from-literal=password=testpassword",
 		"-n", testNamespace)
+
+	By("creating MySQL/MariaDB/MongoDB credentials secrets (Redis/etcd use anonymous auth)")
+	for _, name := range []string{"mysql-credentials", "mariadb-credentials", "mongodb-credentials"} {
+		run("kubectl", "create", "secret", "generic", name,
+			"--from-literal=username=testuser",
+			"--from-literal=password=testpassword",
+			"-n", testNamespace)
+	}
+
+	By("creating Azure credentials secret (used by azure_test.go specs)")
+	run("kubectl", "create", "secret", "generic", "azure-credentials",
+		"--from-literal=AZURE_STORAGE_KEY="+azuriteKey,
+		"-n", testNamespace)
 })
 
 var _ = AfterSuite(func() {
@@ -153,6 +205,10 @@ var _ = AfterSuite(func() {
 	if gcsPortForwardProc != nil && gcsPortForwardProc.Process != nil {
 		gcsPortForwardProc.Process.Kill() //nolint:errcheck
 		gcsPortForwardProc.Wait()         //nolint:errcheck
+	}
+	if azurePortForwardProc != nil && azurePortForwardProc.Process != nil {
+		azurePortForwardProc.Process.Kill() //nolint:errcheck
+		azurePortForwardProc.Wait()         //nolint:errcheck
 	}
 
 	By("deleting kind cluster")
@@ -254,9 +310,13 @@ func runAWSCLI(endpointURL string, args ...string) {
 	}
 }
 
-// deployOperator runs kubectl kustomize on kustomizeDir, replaces the placeholder
-// image with operatorImg, sets imagePullPolicy: IfNotPresent (so kind uses the
-// locally loaded image), and applies the result.
+// deployOperator runs kubectl kustomize on kustomizeDir, rewrites whatever
+// image the kustomize output references for the controller (default
+// `controller:latest`, but `make docker-build` in the operator can mutate
+// `config/manager/kustomization.yaml` to point at a published name like
+// `example.com/dumpscript-operator:v0.0.1`) into the locally loaded
+// operatorImg, and applies the result. Also forces imagePullPolicy to
+// IfNotPresent so kind uses the loaded image instead of trying to pull.
 func deployOperator(kustomizeDir string) {
 	GinkgoHelper()
 	kc := exec.Command("kubectl", "kustomize", kustomizeDir)
@@ -265,9 +325,17 @@ func deployOperator(kustomizeDir string) {
 	Expect(err).NotTo(HaveOccurred(), "kubectl kustomize %s failed", kustomizeDir)
 
 	patched := string(raw)
-	patched = strings.ReplaceAll(patched, "controller:latest", operatorImg)
-	// Ensure the operator pod uses the locally loaded image and does not attempt
-	// to pull from a registry (which would fail in a kind environment).
+
+	// Rewrite *any* image referenced by the controller-manager container.
+	// The kustomize output produces lines like:
+	//     - name: manager
+	//       image: <whatever>
+	// Find every "image: " line that follows a "name: manager" line and replace
+	// the value. This survives upstream mutations of config/manager/kustomization.yaml.
+	patched = rewriteManagerImage(patched, operatorImg)
+
+	// Ensure the operator pod uses the locally loaded image and does not
+	// attempt to pull from a registry (which would fail in a kind environment).
 	patched = strings.ReplaceAll(patched, "image: "+operatorImg,
 		"image: "+operatorImg+"\n        imagePullPolicy: IfNotPresent")
 
@@ -276,6 +344,42 @@ func deployOperator(kustomizeDir string) {
 	apply.Env = podmanEnv()
 	out, err := apply.CombinedOutput()
 	Expect(err).NotTo(HaveOccurred(), "kubectl apply operator manifests failed:\n%s", string(out))
+}
+
+// rewriteManagerImage rewrites every line that points at the operator
+// controller image (default `controller:latest`, or any
+// `example.com/dumpscript-operator:<tag>` left by `make docker-build`) to
+// `image: <newImage>`. Idempotent — multiple runs converge to the same
+// output.
+//
+// We don't try to scope the rewrite by container name because kubebuilder
+// emits container fields in alphabetical order (args/command/image come
+// before name), so a "find name: manager then scan forward" approach
+// silently misses the image. The published controller image string is
+// distinctive enough that a flat substring match is safe.
+func rewriteManagerImage(yaml, newImage string) string {
+	lines := strings.Split(yaml, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "image: ") {
+			val := strings.TrimSpace(strings.TrimPrefix(trimmed, "image:"))
+			if isControllerImage(val) {
+				indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+				lines[i] = indent + "image: " + newImage
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// isControllerImage matches the placeholder operator image string emitted by
+// kubebuilder's default kustomize config. Covers both the unedited default
+// (`controller:latest`) and the published-name variant left by
+// `make docker-build IMG=example.com/...` in the operator's own e2e suite.
+func isControllerImage(val string) bool {
+	return val == "controller:latest" ||
+		strings.HasPrefix(val, "controller:") ||
+		strings.HasPrefix(val, "example.com/dumpscript-operator:")
 }
 
 // kindLoadImage saves the image with podman and pipes it directly into

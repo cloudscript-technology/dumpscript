@@ -35,6 +35,16 @@ const (
 	gcsLocalPort  = "14443" // port-forward from fake-gcs-server :4443
 	// fake-gcs-server endpoint reachable from inside the kind cluster.
 	fakeGCSInCluster = "http://fake-gcs." + testNamespace + ".svc.cluster.local:4443"
+
+	// Azure — Azurite emulator deployed in the kind cluster.
+	azureContainer = "dumpscript-azure-e2e"
+	azureLocalPort = "14000" // port-forward from azurite :10000
+	azureAccount   = "devstoreaccount1"
+	// azuriteKey is the Microsoft-published well-known Azurite emulator key.
+	// Public, safe for local emulator use only.
+	azuriteKey = "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw=="
+	// Azurite blob endpoint reachable from inside the kind cluster.
+	azuriteInCluster = "http://azurite." + testNamespace + ".svc.cluster.local:10000/" + azureAccount
 )
 
 var (
