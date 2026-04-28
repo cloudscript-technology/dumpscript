@@ -19,7 +19,7 @@ spec:
           image: localstack/localstack:4
           env:
             - name: SERVICES
-              value: s3
+              value: s3,iam,sts
             - name: DEFAULT_REGION
               value: us-east-1
             - name: AWS_ACCESS_KEY_ID

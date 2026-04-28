@@ -248,6 +248,22 @@ func seedS3Object(key string) {
 		"seed S3 object %q: HTTP %d", key, resp.StatusCode)
 }
 
+// irsaS3Storage returns a YAML fragment for an S3 storage block that uses
+// IRSA (ServiceAccount token) instead of static credentialsSecretRef.
+// The dumpscript pod will call LocalStack STS to exchange the projected SA
+// token for temporary credentials before making S3 requests.
+func irsaS3Storage(bucket, prefix string) string {
+	return fmt.Sprintf(`  storage:
+    backend: s3
+    s3:
+      bucket: %s
+      prefix: "%s"
+      region: us-east-1
+      endpointURL: %s
+      roleARN: "%s"
+`, bucket, prefix, localstackInCluster, irsaRoleARN)
+}
+
 // psql runs a SQL statement via psql inside the postgres pod.
 func psql(sql string) string {
 	GinkgoHelper()

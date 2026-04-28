@@ -42,7 +42,19 @@ func IRSAProvider(ctx context.Context, cfg *config.Config, log *slog.Logger) (aw
 		return nil, fmt.Errorf("aws config for sts: %w", err)
 	}
 
-	stsClient := sts.NewFromConfig(awsCfg)
+	// Support a custom STS endpoint so IRSA works with LocalStack and other
+	// STS-compatible services. AWS_ENDPOINT_URL_STS takes precedence over the
+	// broader AWS_ENDPOINT_URL override.
+	stsOpts := []func(*sts.Options){}
+	for _, key := range []string{"AWS_ENDPOINT_URL_STS", "AWS_ENDPOINT_URL"} {
+		if ep := os.Getenv(key); ep != "" {
+			ep := ep // capture
+			stsOpts = append(stsOpts, func(o *sts.Options) { o.BaseEndpoint = &ep })
+			log.Info("IRSA: custom STS endpoint", "env", key, "url", ep)
+			break
+		}
+	}
+	stsClient := sts.NewFromConfig(awsCfg, stsOpts...)
 	provider := stscreds.NewWebIdentityRoleProvider(
 		stsClient,
 		cfg.S3.RoleARN,

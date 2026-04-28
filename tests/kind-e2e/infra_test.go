@@ -24,7 +24,7 @@ var _ = BeforeSuite(func() {
 	SetDefaultEventuallyPollingInterval(3 * time.Second)
 
 	By("checking required tools")
-	requireTools("kind", "kubectl", "docker", "terragrunt")
+	requireTools("kind", "kubectl", "docker", "terragrunt", "aws")
 
 	By("cleaning up any leftover kind cluster from a previous run")
 	exec.Command("kind", "delete", "cluster", "--name", clusterName).Run() //nolint:errcheck
@@ -96,11 +96,14 @@ var _ = BeforeSuite(func() {
 		g.Expect(phase).To(Equal("Running"))
 	}, 3*time.Minute, 5*time.Second).Should(Succeed())
 
-	By("creating AWS credentials secret")
+	By("creating AWS credentials secret (used by static-credential test specs)")
 	run("kubectl", "create", "secret", "generic", "aws-credentials",
 		"--from-literal=AWS_ACCESS_KEY_ID=test",
 		"--from-literal=AWS_SECRET_ACCESS_KEY=test",
 		"-n", testNamespace)
+
+	By("setting up IRSA: ServiceAccount + LocalStack IAM role (for IRSA test spec)")
+	setupIRSA()
 
 	By("creating PostgreSQL credentials secret")
 	run("kubectl", "create", "secret", "generic", "postgres-credentials",
@@ -129,6 +132,101 @@ var _ = AfterSuite(func() {
 	By("deleting kind cluster")
 	exec.Command("kind", "delete", "cluster", "--name", clusterName).Run() //nolint:errcheck
 })
+
+// setupIRSA configures the kind e2e namespace to use ServiceAccount-based auth
+// instead of static AWS credentials:
+//
+//  1. Registers the kind cluster's OIDC issuer with LocalStack IAM so that
+//     sts:AssumeRoleWithWebIdentity succeeds.
+//  2. Creates an IAM role in LocalStack that the ServiceAccount can assume.
+//  3. Creates a Kubernetes ServiceAccount annotated with the role ARN.
+//
+// BackupSchedule specs then use `serviceAccountName: dumpscript-sa` and
+// `roleARN` — no credentialsSecretRef needed.
+func setupIRSA() {
+	GinkgoHelper()
+
+	// Discover the OIDC issuer URL from the kind API server.
+	issuerJSON := mustOutput("kubectl", "get", "--raw",
+		"/.well-known/openid-configuration")
+	// Extract the "issuer" value from the JSON without importing encoding/json.
+	// The discovery doc looks like: {"issuer":"https://...", ...}
+	const issuerKey = `"issuer":"`
+	idx := strings.Index(issuerJSON, issuerKey)
+	Expect(idx).To(BeNumerically(">=", 0),
+		"could not find issuer field in OIDC discovery: %s", issuerJSON[:min(200, len(issuerJSON))])
+	rest := issuerJSON[idx+len(issuerKey):]
+	end := strings.IndexByte(rest, '"')
+	Expect(end).To(BeNumerically(">", 0), "malformed OIDC issuer JSON")
+	issuer := rest[:end]
+	GinkgoWriter.Printf("IRSA setup: OIDC issuer = %s\n", issuer)
+
+	// Register the cluster's OIDC provider in LocalStack (thumbprint is not
+	// validated in community edition — any 40-char hex string is accepted).
+	iamEndpoint := fmt.Sprintf("http://localhost:%s", lsLocalPort)
+	fakeThumbprint := "9e99a48a9960b14926bb7f3b02e22da2b0ab7280"
+	runAWSCLI(iamEndpoint,
+		"iam", "create-open-id-connect-provider",
+		"--url", issuer,
+		"--thumbprint-list", fakeThumbprint,
+		"--client-id-list", "sts.amazonaws.com",
+	)
+
+	// Strip the scheme from the issuer URL to build the OIDC provider ARN path
+	// used in the trust policy condition.
+	issuerHost := strings.TrimPrefix(strings.TrimPrefix(issuer, "https://"), "http://")
+	trustPolicy := fmt.Sprintf(
+		`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Federated":"arn:aws:iam::000000000000:oidc-provider/%s"},"Action":"sts:AssumeRoleWithWebIdentity","Condition":{"StringEquals":{"%s:aud":"sts.amazonaws.com"}}}]}`,
+		issuerHost, issuerHost)
+
+	runAWSCLI(iamEndpoint,
+		"iam", "create-role",
+		"--role-name", irsaRoleName,
+		"--assume-role-policy-document", trustPolicy,
+	)
+	runAWSCLI(iamEndpoint,
+		"iam", "attach-role-policy",
+		"--role-name", irsaRoleName,
+		"--policy-arn", "arn:aws:iam::aws:policy/AmazonS3FullAccess",
+	)
+
+	// Create the Kubernetes ServiceAccount annotated with the role ARN.
+	roleARN := fmt.Sprintf("arn:aws:iam::000000000000:role/%s", irsaRoleName)
+	applyManifest(fmt.Sprintf(`
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: %s
+  namespace: %s
+  annotations:
+    eks.amazonaws.com/role-arn: "%s"
+`, irsaSAName, testNamespace, roleARN))
+
+	GinkgoWriter.Printf("IRSA setup complete: SA=%s role=%s\n", irsaSAName, roleARN)
+}
+
+// runAWSCLI invokes the aws CLI targeting the given endpoint-url using the
+// fake LocalStack credentials. Fails the test if the command returns non-zero.
+func runAWSCLI(endpointURL string, args ...string) {
+	GinkgoHelper()
+	full := append([]string{
+		"--endpoint-url", endpointURL,
+		"--region", "us-east-1",
+		"--output", "json",
+	}, args...)
+	c := exec.Command("aws", full...)
+	c.Env = append(podmanEnv(),
+		"AWS_ACCESS_KEY_ID=test",
+		"AWS_SECRET_ACCESS_KEY=test",
+		"AWS_DEFAULT_REGION=us-east-1",
+	)
+	out, err := c.CombinedOutput()
+	// Ignore "already exists" errors — idempotent setup.
+	if err != nil && !strings.Contains(string(out), "EntityAlreadyExists") {
+		Expect(err).NotTo(HaveOccurred(),
+			"aws %v failed:\n%s", args, string(out))
+	}
+}
 
 // deployOperator runs kubectl kustomize on kustomizeDir, replaces the placeholder
 // image with operatorImg, sets imagePullPolicy: IfNotPresent (so kind uses the

@@ -21,6 +21,14 @@ const (
 	lsLocalPort   = "14566"
 	bucketName    = "dumpscript-e2e"
 	operatorNS    = "dumpscript-operator-system"
+
+	// IRSA — ServiceAccount-based auth for LocalStack via sts:AssumeRoleWithWebIdentity.
+	irsaSAName   = "dumpscript-sa"
+	irsaRoleName = "dumpscript-test"
+	// Full LocalStack role ARN: account 000000000000 is LocalStack's fake account.
+	irsaRoleARN = "arn:aws:iam::000000000000:role/" + irsaRoleName
+	// LocalStack STS endpoint reachable from inside the kind cluster.
+	irsaSTSEndpoint = "http://localstack." + testNamespace + ".svc.cluster.local:4566"
 )
 
 var (

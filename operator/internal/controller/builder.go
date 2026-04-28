@@ -36,6 +36,11 @@ func buildCronJob(bs *dumpscriptv1alpha1.BackupSchedule) *batchv1.CronJob {
 	}
 
 	volumes, mounts := secretVolumes(bs.Spec.Storage)
+	irsaVol, irsaMount := irsaVolume(bs.Spec.Storage)
+	if irsaVol != nil {
+		volumes = append(volumes, *irsaVol)
+		mounts = append(mounts, *irsaMount)
+	}
 
 	return &batchv1.CronJob{
 		ObjectMeta: metav1.ObjectMeta{
@@ -88,6 +93,11 @@ func buildRestoreJob(r *dumpscriptv1alpha1.Restore) *batchv1.Job {
 		env = append(env, corev1.EnvVar{Name: "CREATE_DB", Value: "true"})
 	}
 	volumes, mounts := secretVolumes(r.Spec.Storage)
+	irsaVol, irsaMount := irsaVolume(r.Spec.Storage)
+	if irsaVol != nil {
+		volumes = append(volumes, *irsaVol)
+		mounts = append(mounts, *irsaMount)
+	}
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "restore-" + r.Name,
@@ -114,6 +124,41 @@ func buildRestoreJob(r *dumpscriptv1alpha1.Restore) *batchv1.Job {
 			},
 		},
 	}
+}
+
+// irsaVolume returns the projected ServiceAccount token Volume and VolumeMount
+// required for IRSA (AWS_ROLE_ARN + sts:AssumeRoleWithWebIdentity) when
+// spec.storage.s3.roleARN is set. Without this volume the SDK cannot find the
+// token file and falls back to static credentials.
+//
+// On EKS, the pod-identity webhook already injects this volume automatically;
+// here we add it ourselves so IRSA works on any OIDC-capable cluster (GKE,
+// kind + local OIDC, vanilla Kubernetes with dex, etc.).
+func irsaVolume(s dumpscriptv1alpha1.StorageSpec) (*corev1.Volume, *corev1.VolumeMount) {
+	if s.Backend != "s3" || s.S3 == nil || s.S3.RoleARN == "" {
+		return nil, nil
+	}
+	ttl := int64(86400)
+	vol := &corev1.Volume{
+		Name: "aws-iam-token",
+		VolumeSource: corev1.VolumeSource{
+			Projected: &corev1.ProjectedVolumeSource{
+				Sources: []corev1.VolumeProjection{{
+					ServiceAccountToken: &corev1.ServiceAccountTokenProjection{
+						Audience:          "sts.amazonaws.com",
+						ExpirationSeconds: &ttl,
+						Path:              "token",
+					},
+				}},
+			},
+		},
+	}
+	mount := &corev1.VolumeMount{
+		Name:      "aws-iam-token",
+		MountPath: "/var/run/secrets/eks.amazonaws.com/serviceaccount",
+		ReadOnly:  true,
+	}
+	return vol, mount
 }
 
 // secretVolumes returns Volumes + VolumeMounts that materialise sensitive
@@ -210,7 +255,23 @@ func storageEnv(s dumpscriptv1alpha1.StorageSpec) []corev1.EnvVar {
 			env = append(env, corev1.EnvVar{Name: "S3_STORAGE_CLASS", Value: s.S3.StorageClass})
 		}
 		if s.S3.RoleARN != "" {
-			env = append(env, corev1.EnvVar{Name: "AWS_ROLE_ARN", Value: s.S3.RoleARN})
+			env = append(env,
+				corev1.EnvVar{Name: "AWS_ROLE_ARN", Value: s.S3.RoleARN},
+				// Token file path must match the irsaVolume mount path.
+				corev1.EnvVar{
+					Name:  "AWS_WEB_IDENTITY_TOKEN_FILE",
+					Value: "/var/run/secrets/eks.amazonaws.com/serviceaccount/token",
+				},
+			)
+			// When a custom S3 endpoint is configured (e.g. LocalStack, on-prem),
+			// redirect STS to the same host so AssumeRoleWithWebIdentity works.
+			// On EKS this is not needed — the real STS endpoint is used.
+			if s.S3.EndpointURL != "" {
+				env = append(env, corev1.EnvVar{
+					Name:  "AWS_ENDPOINT_URL_STS",
+					Value: s.S3.EndpointURL,
+				})
+			}
 		}
 		if c := s.S3.CredentialsSecretRef; c != nil {
 			env = append(env,
