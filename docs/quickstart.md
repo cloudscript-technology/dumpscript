@@ -156,6 +156,21 @@ Full reference: [configuration](./configuration.md).
 
 ---
 
+## Useful flags worth knowing
+
+| Goal | Set |
+|---|---|
+| Validate config + reachability without touching the DB | `DRY_RUN=true` |
+| Smaller dumps, ~2x faster | `COMPRESSION_TYPE=zstd` (gzip stays default) |
+| Survive a transient network blip mid-dump | `DUMP_RETRIES=3` (default), tunable via `DUMP_RETRY_BACKOFF` / `DUMP_RETRY_MAX_BACKOFF` |
+| Recover from a stale lock left by a crashed run | `LOCK_GRACE_PERIOD=24h` (default) |
+| S3 server-side encryption | `S3_SSE=aws:kms` + optional `S3_SSE_KMS_KEY_ID` |
+| Expose `/metrics` to a sidecar / mesh | `METRICS_LISTEN=:9090` |
+| Preview retention deletes before they happen | `DRY_RUN=true` on `dumpscript cleanup` |
+
+Inside the operator, every one of these has a typed CRD field — see
+[`operator/README.md`](../operator/README.md) for the full reference.
+
 ## Next steps
 
 - [Configuration reference](./configuration.md)

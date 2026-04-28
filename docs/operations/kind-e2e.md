@@ -1,7 +1,16 @@
 # Kind E2E Test Suite
 
-Documentação completa dos 31 specs de teste end-to-end que validam o
-dumpscript operator num cluster Kubernetes real (kind).
+Documentação dos ~60+ specs de teste end-to-end que validam o
+dumpscript operator num cluster Kubernetes real (kind), cobrindo:
+
+- 6 engines (postgres, mysql, mariadb, mongodb, redis, etcd) com backup +
+  restore (redis/etcd só backup — restore unsupported pelo binário)
+- 3 storage backends (S3 via LocalStack, GCS via fake-gcs-server, Azure via
+  Azurite)
+- IRSA / ServiceAccount-based auth via OIDC + LocalStack STS
+- Features novas do binário: `dryRun`, `compression: zstd`, S3 object tagging
+- Lifecycle (suspend/resume, history limits, cascade delete)
+- Edge cases (retention, lock, prefix isolation, periodicity layout, etc.)
 
 ---
 
@@ -36,10 +45,19 @@ tests/kind-e2e/
 ├── infra_test.go          ─ BeforeSuite / AfterSuite (setup do cluster)
 ├── helpers_test.go        ─ utilitários: run(), psql(), seedS3Object(), …
 │
-├── backup_test.go         ─ 7 specs: fluxo principal backup → restore
+├── backup_test.go         ─ 7 specs: fluxo principal backup → restore (postgres + S3)
 ├── lifecycle_test.go      ─ 7 specs: ciclo de vida do BackupSchedule
 ├── advanced_test.go       ─ 8 specs: features avançadas (prefix, TTL, createDB, …)
 ├── more_test.go           ─ 9 specs: retention, lock, periodicity, status fields
+├── irsa_test.go           ─ specs: ServiceAccount-based S3 auth (IRSA via OIDC)
+├── gcs_test.go            ─ specs: GCS backend via fake-gcs-server
+├── azure_test.go          ─ specs: Azure Blob backend via Azurite
+├── mysql_test.go          ─ 4 specs: MySQL backup + restore
+├── mariadb_test.go        ─ 4 specs: MariaDB backup + restore
+├── mongodb_test.go        ─ 4 specs: MongoDB backup + restore (com authSource)
+├── redis_test.go          ─ 3 specs: Redis backup-only (restore unsupported)
+├── etcd_test.go           ─ 3 specs: etcd backup-only (restore unsupported)
+├── features_test.go       ─ 4 specs: dryRun, compression=zstd, S3 object tagging
 │
 ├── terragrunt.hcl         ─ config Terragrunt (state em /tmp)
 ├── terraform/
@@ -48,7 +66,14 @@ tests/kind-e2e/
 │   └── outputs.tf
 └── manifests/
     ├── localstack.yaml    ─ LocalStack 4 (SERVICES=s3)
-    └── postgres.yaml      ─ PostgreSQL 17
+    ├── postgres.yaml      ─ PostgreSQL 17
+    ├── mysql.yaml         ─ MySQL 8.0
+    ├── mariadb.yaml       ─ MariaDB 11
+    ├── mongodb.yaml       ─ MongoDB 7 (com auth)
+    ├── redis.yaml         ─ Redis 7-alpine
+    ├── etcd.yaml          ─ etcd v3.5
+    ├── fake-gcs.yaml      ─ fake-gcs-server (emulador GCS)
+    └── azurite.yaml       ─ Azurite (emulador Azure Blob)
 ```
 
 ---

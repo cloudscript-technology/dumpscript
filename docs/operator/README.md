@@ -23,7 +23,12 @@ resto. Compare:
 | Resolve Secret refs declarativamente | manual em env | ✅ `credentialsSecretRef` |
 | Auto-mount de volume Secret (GCS SA JSON) | manual | ✅ automático |
 | RBAC scoping | mistura SA+Secret+CronJob | ✅ um CRD |
-| Métricas Prometheus do estado | não | (planned) |
+| Métricas Prometheus do estado | não | ✅ `dumpscript_backup_total` / `_duration_seconds` no `/metrics` do operator |
+| Conditions + Events para debug | não | ✅ `kubectl describe` mostra `Reconciled`, `LastRunSucceeded`, `LastRunFailed` |
+| Status agregado (totalRuns, consecutiveFailures, etc.) | não | ✅ `kubectl get backupschedule` |
+| Tunables por engine type-safe (mongo authSource, sqlite volume, S3 SSE-KMS) | manual via env | ✅ first-class fields |
+| Pod scheduling (resources, nodeSelector, tolerations, affinity) | manual em CronJob | ✅ no CRD |
+| `dryRun`, `compression`, `dumpRetry`, `lockGracePeriod` | manual via env | ✅ no CRD |
 
 ---
 

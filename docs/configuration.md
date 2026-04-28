@@ -57,6 +57,13 @@ meta-flags:
 | `VERIFY_CONTENT` | `true` | Run per-engine content verifier post-dump |
 | `DUMP_TIMEOUT` | `2h` | Hard ceiling on the dump process |
 | `RESTORE_TIMEOUT` | `2h` | Hard ceiling on the restore process |
+| `DRY_RUN` | `false` | Validate config + destination reachability, then skip the dump/upload (or restore). Useful for smoke-testing a freshly applied schedule. |
+| `COMPRESSION_TYPE` | `gzip` | `gzip` or `zstd`. Sets the codec used for the on-disk dump. zstd produces ~30% smaller files at ~2x the throughput. **Note:** mongodump and etcd snapshots are always wrapped in gzip natively, so they ignore this setting. |
+| `DUMP_RETRIES` | `3` | Total dump attempts (1 = single attempt). Retries kick in for transient failures (network blips, mid-failover). |
+| `DUMP_RETRY_BACKOFF` | `5s` | Initial delay between retries; doubles each attempt. |
+| `DUMP_RETRY_MAX_BACKOFF` | `5m` | Cap on the exponential backoff. |
+| `LOCK_GRACE_PERIOD` | `24h` | When a stale lock from a crashed previous run is older than this, the next run takes over instead of skipping. Set to `0` to disable stale-lock recovery (strict mode). |
+| `METRICS_LISTEN` | empty | When set (e.g. `:9090`), the binary spawns a `/metrics` HTTP listener for direct Prometheus scrape. Use the Pushgateway path instead for short-lived CronJob runs. |
 
 ---
 
@@ -84,6 +91,8 @@ Applies when `STORAGE_BACKEND=s3`.
 | `AWS_S3_ENDPOINT_URL` | — | MinIO/GCS override (e.g. `https://storage.googleapis.com`) |
 | `S3_STORAGE_CLASS` | — | `STANDARD_IA`, `GLACIER`, etc. (AWS only) |
 | `S3_KEY` | — | **Restore only** — object key to download |
+| `S3_SSE` | — | Server-side encryption: `AES256` (S3-managed keys) or `aws:kms` (KMS). Empty disables. |
+| `S3_SSE_KMS_KEY_ID` | — | KMS key ARN/alias when `S3_SSE=aws:kms`. Empty falls back to the bucket's default KMS key. |
 
 Deep dive: [S3 backend](./storage/s3.md).
 

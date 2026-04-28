@@ -21,6 +21,25 @@ use um `metadata.name` diferente.
 | `image` | string | `ghcr.io/cloudscript-technology/dumpscript:latest` | Override |
 | `serviceAccountName` | string | — | KSA pra IRSA/WI |
 | `ttlSecondsAfterFinished` | *int32 | `86400` (24h) | TTL do Job pós-conclusão |
+| `imagePullPolicy` | enum | — | `Always` \| `Never` \| `IfNotPresent` |
+| `imagePullSecrets` | []corev1.LocalObjectReference | — | Pull secrets do registry privado |
+| `dryRun` | bool | `false` | Valida config + reachability e pula o restore |
+| `compression` | enum | — | `gzip` \| `zstd` — codec do source artifact (auto-detectado pela extensão `.gz`/`.zst`) |
+| `restoreTimeout` | *metav1.Duration | `2h` | Hard-cap do `restore` (passa como `RESTORE_TIMEOUT`) |
+| `verifyContent` | *bool | `true` | Habilita verifier pós-restore (TCP probe no `database.host:port`) |
+| `workDir` | string | `/dumpscript` | Scratch dir |
+| `logLevel` | enum | `info` | `debug` \| `info` \| `warn` \| `error` |
+| `logFormat` | enum | `json` | `json` \| `console` |
+| `metricsListen` | string | empty | `:9090` para expor `/metrics` no pod |
+| `prometheus` | *PrometheusSpec | — | Pushgateway (mesmo shape do BackupSchedule) |
+| `backoffLimit` | *int32 | `0` | Job's BackoffLimit (restores raramente se beneficiam de retry) |
+| `activeDeadlineSeconds` | *int64 | — | Mata o pod após N segundos rodando |
+| `resources` | corev1.ResourceRequirements | — | Limits/requests do container |
+| `nodeSelector` | map[string]string | — | Pod scheduling |
+| `tolerations` | []corev1.Toleration | — | Pod scheduling |
+| `affinity` | *corev1.Affinity | — | Pod scheduling |
+| `priorityClassName` | string | — | Pod priority |
+| `extraEnv` | []corev1.EnvVar | — | Env vars extras (operator-managed vencem) |
 
 `database` / `storage` / `notifications` têm o mesmo shape do
 `BackupSchedule` — ver [BackupSchedule reference](./backupschedule.md#databasespec).
@@ -35,15 +54,33 @@ use um `metadata.name` diferente.
 | `jobName` | string | nome do `batch/v1.Job` criado |
 | `startedAt` | *metav1.Time | quando o Job começou |
 | `completedAt` | *metav1.Time | quando terminou (success ou fail) |
-| `message` | string | mensagem curta humana, populada em failure |
-| `conditions` | []metav1.Condition | padrão K8s |
+| `durationSeconds` | int64 | Duração de StartedAt → CompletedAt (0 enquanto rodando) |
+| `message` | string | Texto humano: sucesso traz "restore from <key> completed", falha traz job + attempts |
+| `observedGeneration` | int64 | Generation observada no último reconcile |
+| `conditions` | []metav1.Condition | `Ready` reflete o phase (True/False/Unknown) |
 
-`kubectl get restore` mostra via printcolumn:
+`kubectl get restore` (default columns):
 
 ```
-NAME                              PHASE       ENGINE       SOURCE                                                    STARTED      COMPLETED
-pg-staging-restore-from-prod      Succeeded   postgresql   pg/daily/2026/04/26/dump_20260426_020000.sql.gz           2026-04-27   2026-04-27
+NAME                              PHASE       ENGINE       SOURCE                                            READY  STARTED  COMPLETED  AGE
+pg-staging-restore-from-prod      Succeeded   postgresql   pg/daily/2026/04/26/dump_*.sql.gz                 True   2m       1m         3m
 ```
+
+`kubectl get restore -o wide`:
+
+```
++ JOB                            DURATION  BACKEND  REASON              MESSAGE
+  restore-pg-staging-restore...  92        s3       RestoreSucceeded    restore from pg/... completed successfully
+```
+
+### Events
+
+| Reason | Type | Quando |
+|---|---|---|
+| `RestoreRunning` | Normal | Job criado |
+| `RestoreSucceeded` | Normal | Job observado em sucesso terminal |
+| `RestoreFailed` | Warning | Job observado em falha terminal |
+| `RestoreJobError` | Warning | Falha ao criar o Job |
 
 ---
 

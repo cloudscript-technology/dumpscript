@@ -67,15 +67,21 @@ compatibility of the newest clients.
 | **MongoDB versions**        | 4.0 → 7.0+ via `mongodb-tools` latest                     |
 | **Storage backends**        | S3, MinIO, GCS (S3-compat HMAC), Azure Blob, Azurite      |
 | **Authentication**          | AWS static keys, IRSA (EKS), SAS token, Shared Key        |
-| **Distributed locking**     | Day-level `.lock` object with JSON metadata               |
+| **Distributed locking**     | Day-level `.lock` object with JSON metadata; stale-lock takeover after `LOCK_GRACE_PERIOD` |
 | **Reachability preflight**  | `List` call before any dump                               |
-| **Content verification**    | Footer scan (Postgres/SQL), magic check (Mongo)           |
-| **Retention**               | Configurable days; parses date from the object path       |
-| **Notifications**           | Slack webhook (start / success / failure / skipped)       |
+| **Content verification**    | Footer scan (Postgres/SQL), magic check (Mongo); post-restore TCP probe |
+| **Retention**               | Configurable days; parses date from the object path; `--dry-run` preview |
+| **Notifications**           | Slack / Discord / Teams / generic Webhook / stdout, with retry on transient failure |
 | **Periodicity**             | `daily`, `weekly`, `monthly`, `yearly`                    |
-| **Kubernetes operator**     | `BackupSchedule` and `Restore` CRDs, auto-manages CronJobs |
-| **Notifiers**               | Slack, Discord, Teams, Webhook, Stdout                    |
-| **Post-upload integrity**   | SHA-256 / CRC32C / size verified against storage metadata |
+| **Kubernetes operator**     | `BackupSchedule` and `Restore` CRDs, auto-manages CronJobs; ~50 type-safe spec fields |
+| **Compression**             | gzip (default) or zstd via `COMPRESSION_TYPE`             |
+| **Dump retry**              | `DUMP_RETRIES` exponential backoff (3×, 5s→5m default)    |
+| **Dry-run mode**            | `DRY_RUN=true` validates config + reachability without writing data |
+| **Server-side encryption**  | S3 SSE-AES256 / SSE-KMS via `S3_SSE` + `S3_SSE_KMS_KEY_ID` |
+| **Object tagging**          | `managed_by=dumpscript`, `engine=…`, `periodicity=…` on every uploaded artifact |
+| **Log redaction**           | slog handler masks `password`/`secret`/`token`/`*_key` attrs in stdout/JSON |
+| **Post-upload integrity**   | SHA-256 / CRC32C / size verified against storage metadata; checksum carried on Artifact |
+| **Prometheus metrics**      | Pushgateway path + optional in-pod `/metrics` listener (`METRICS_LISTEN`) |
 
 ---
 
@@ -494,15 +500,88 @@ spec:
       notifySuccess: true
 ```
 
+### BackupSchedule — runtime tuning (optional fields)
+
+```yaml
+spec:
+  # Binary behavior
+  dryRun: false               # validate config + reachability, skip dump
+  compression: zstd           # gzip (default) | zstd
+  dumpTimeout: 2h
+  lockGracePeriod: 24h        # stale-lock takeover; 0 disables
+  verifyContent: true
+  workDir: /dumpscript
+  logLevel: info
+  logFormat: json
+  metricsListen: ":9090"      # in-pod /metrics for direct scrape
+  dumpRetry:
+    maxAttempts: 3
+    initialBackoff: 5s
+    maxBackoff: 5m
+  prometheus:
+    enabled: true
+    pushgatewayURL: http://pushgateway.monitoring.svc:9091
+    jobName: dumpscript
+    instance: postgres-nightly
+
+  # CronJob/Job tunables
+  concurrencyPolicy: Forbid   # Forbid | Allow | Replace
+  startingDeadlineSeconds: 300
+  backoffLimit: 0
+  activeDeadlineSeconds: 7200
+
+  # Pod scheduling
+  resources:
+    requests: { cpu: "100m", memory: "256Mi" }
+    limits:   { memory: "1Gi" }
+  nodeSelector:    { workload: backup }
+  tolerations:
+    - { key: backup-only, operator: Exists, effect: NoSchedule }
+  imagePullPolicy: IfNotPresent
+  imagePullSecrets:
+    - name: ghcr-pull-secret
+
+  # S3 server-side encryption
+  storage:
+    s3:
+      sse: aws:kms
+      sseKMSKeyID: arn:aws:kms:us-east-1:123:key/abc
+
+  # MongoDB-specific (only when database.type=mongodb)
+  database:
+    mongodb:
+      authSource: admin
+
+  # SQLite-specific (file-based DB needs a volume)
+  database:
+    volume:
+      mountPath: /data
+      persistentVolumeClaim:
+        claimName: sqlite-data
+```
+
+For the full per-field reference, see [`operator/README.md`](./operator/README.md).
+
 ### BackupSchedule — status
 
 ```yaml
 status:
-  lastSuccessTime: "2026-04-28T02:04:12Z"
-  lastFailureTime: null
   lastScheduleTime: "2026-04-28T02:00:00Z"
-  currentRun: ""         # empty when idle; pod name when active
-  conditions: []
+  lastSuccessTime:  "2026-04-28T02:04:12Z"
+  lastFailureTime:  null
+  lastRetentionTime: "2026-04-28T02:04:12Z"
+  lastJobName:      "postgres-nightly-29063840"
+  lastDurationSeconds: 251
+  totalRuns:        87
+  consecutiveFailures: 0
+  currentRun:       ""        # empty when idle; pod name when active
+  observedGeneration: 4
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: LastRunSucceeded
+      lastTransitionTime: "2026-04-28T02:04:12Z"
+      message: most recent run succeeded
 ```
 
 ### Restore — example
@@ -551,15 +630,23 @@ status:
 |---|---|
 | **Managed CronJob lifecycle** | Creates, updates and deletes the CronJob — including schedule and suspend changes |
 | **Owner references** | Deleting a BackupSchedule automatically garbage-collects its CronJob |
-| **Status propagation** | `lastSuccessTime` / `lastFailureTime` / `lastScheduleTime` kept in sync via Job label watch |
+| **Status propagation** | `lastSuccessTime` / `lastFailureTime` / `lastScheduleTime` / `lastJobName` / `lastDurationSeconds` / `totalRuns` / `consecutiveFailures` populated from observed Jobs |
+| **Conditions** | Standard `Ready` condition (`metav1.Condition`) reflects the most recent run outcome |
+| **Events** | Reconcilers emit Kubernetes Events (`Reconciled`, `LastRunSucceeded`, `LastRunFailed`) — visible in `kubectl describe` |
 | **Suspend / resume** | Patch `spec.suspend: true/false` without recreating anything |
 | **History limits** | `failedJobsHistoryLimit` and `successfulJobsHistoryLimit` pass through to the CronJob |
-| **ConcurrencyPolicy** | Always `ForbidConcurrent` — the distributed lock is a second safety layer |
+| **ConcurrencyPolicy** | `Forbid` (default) / `Allow` / `Replace` — distributed lock is the second safety layer |
+| **Job tunables** | `startingDeadlineSeconds`, `backoffLimit`, `activeDeadlineSeconds` exposed |
+| **Pod scheduling** | `resources`, `nodeSelector`, `tolerations`, `affinity`, `priorityClassName`, `imagePullPolicy`, `imagePullSecrets`, `extraEnv` all type-safe |
+| **CRD validation (CEL)** | Cross-field rules: `storage.s3` required when `backend=s3` (same for gcs/azure); `volume` requires at least one source |
+| **Per-engine sub-blocks** | `database.mongodb.authSource`, `database.postgresql.version`, `database.mysql.version`, `database.mariadb.version`, `database.volume` (sqlite) |
+| **Custom Prometheus metrics** | `dumpscript_backup_total`, `dumpscript_restore_total`, plus `*_duration_seconds` histograms — exposed on the operator's `/metrics` endpoint |
 | **Restore TTL** | `ttlSecondsAfterFinished` removes the completed Job automatically |
 | **createDB** | Restore can issue `CREATE DATABASE` before applying the dump |
 | **All notifiers** | Slack, Discord, Teams, generic Webhook, Stdout via `notifications` block |
-| **All storage backends** | S3 (+ IRSA), Azure Blob (+ SAS), GCS (+ Workload Identity) |
-| **Image override** | `spec.image` overrides the default image per schedule |
+| **All storage backends** | S3 (+ IRSA + SSE-KMS), Azure Blob (+ SAS), GCS (+ Workload Identity) |
+| **Image override** | `spec.image` + `imagePullPolicy` + `imagePullSecrets` per schedule |
+| **Printer columns** | `kubectl get backupschedule` shows Schedule/Engine/Backend/Suspended/Ready/Last-Success/Age; `-o wide` adds 9 more |
 
 ### Deploy the operator
 
