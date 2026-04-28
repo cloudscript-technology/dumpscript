@@ -26,12 +26,13 @@
 10. [Content verification](#content-verification)
 11. [Retention](#retention)
 12. [Slack notifications](#slack-notifications)
-13. [Image build options](#image-build-options)
-14. [Development](#development)
-15. [Testing](#testing)
-16. [Project layout](#project-layout)
-17. [Design patterns](#design-patterns)
-18. [License](#license)
+13. [Kubernetes operator](#kubernetes-operator)
+14. [Image build options](#image-build-options)
+15. [Development](#development)
+16. [Testing](#testing)
+17. [Project layout](#project-layout)
+18. [Design patterns](#design-patterns)
+19. [License](#license)
 
 ---
 
@@ -72,6 +73,9 @@ compatibility of the newest clients.
 | **Retention**               | Configurable days; parses date from the object path       |
 | **Notifications**           | Slack webhook (start / success / failure / skipped)       |
 | **Periodicity**             | `daily`, `weekly`, `monthly`, `yearly`                    |
+| **Kubernetes operator**     | `BackupSchedule` and `Restore` CRDs, auto-manages CronJobs |
+| **Notifiers**               | Slack, Discord, Teams, Webhook, Stdout                    |
+| **Post-upload integrity**   | SHA-256 / CRC32C / size verified against storage metadata |
 
 ---
 
@@ -423,6 +427,153 @@ incident responders can correlate dump files to runs.
 
 ---
 
+## Kubernetes operator
+
+The `operator/` directory contains a **Kubebuilder-based controller** that
+manages `BackupSchedule` and `Restore` custom resources.  Instead of writing
+CronJob YAML by hand, you declare what you want and the operator reconciles it:
+
+```
+BackupSchedule CR  ──►  operator  ──►  batch/v1 CronJob
+                                           │
+                                      (fires every schedule)
+                                           │
+                                       dumpscript dump
+                                           │
+                                       S3 / Azure / GCS
+
+Restore CR  ──►  operator  ──►  batch/v1 Job
+                                    │
+                                dumpscript restore
+```
+
+### CRDs
+
+| CRD | Group | Scope | Purpose |
+|---|---|---|---|
+| `BackupSchedule` | `dumpscript.cloudscript.com.br/v1alpha1` | Namespaced | Recurring backup via managed CronJob |
+| `Restore` | `dumpscript.cloudscript.com.br/v1alpha1` | Namespaced | One-shot restore via managed Job |
+
+### BackupSchedule — example
+
+```yaml
+apiVersion: dumpscript.cloudscript.com.br/v1alpha1
+kind: BackupSchedule
+metadata:
+  name: postgres-nightly
+  namespace: production
+spec:
+  schedule: "0 2 * * *"        # standard cron
+  periodicity: daily
+  retentionDays: 30
+  image: ghcr.io/cloudscript-technology/dumpscript:latest
+
+  database:
+    type: postgresql
+    host: postgres.production.svc.cluster.local
+    name: app
+    credentialsSecretRef:
+      name: postgres-backup-secret   # keys: username, password
+
+  storage:
+    backend: s3
+    s3:
+      bucket: my-backups
+      prefix: postgres/production
+      region: us-east-1
+      credentialsSecretRef:
+        name: aws-backup-secret      # keys: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+
+  notifications:
+    stdout: true
+    slack:
+      webhookSecretRef:
+        name: slack-secret
+        key: url
+      channel: "#ops-alerts"
+      notifySuccess: true
+```
+
+### BackupSchedule — status
+
+```yaml
+status:
+  lastSuccessTime: "2026-04-28T02:04:12Z"
+  lastFailureTime: null
+  lastScheduleTime: "2026-04-28T02:00:00Z"
+  currentRun: ""         # empty when idle; pod name when active
+  conditions: []
+```
+
+### Restore — example
+
+```yaml
+apiVersion: dumpscript.cloudscript.com.br/v1alpha1
+kind: Restore
+metadata:
+  name: restore-2026-04-28
+  namespace: production
+spec:
+  sourceKey: "postgres/production/daily/2026/04/28/dump_20260428_020412.sql.gz"
+  createDB: false                    # set true to CREATE DATABASE first
+  ttlSecondsAfterFinished: 86400     # clean up Job after 24h
+
+  database:
+    type: postgresql
+    host: postgres.production.svc.cluster.local
+    name: app
+    credentialsSecretRef:
+      name: postgres-backup-secret
+
+  storage:
+    backend: s3
+    s3:
+      bucket: my-backups
+      region: us-east-1
+      credentialsSecretRef:
+        name: aws-backup-secret
+```
+
+### Restore — status
+
+```yaml
+status:
+  phase: Succeeded        # Pending | Running | Succeeded | Failed
+  jobName: restore-restore-2026-04-28
+  startedAt: "2026-04-28T10:01:00Z"
+  completedAt: "2026-04-28T10:02:34Z"
+  message: ""             # populated with error description on Failed
+```
+
+### Operator features
+
+| Feature | Detail |
+|---|---|
+| **Managed CronJob lifecycle** | Creates, updates and deletes the CronJob — including schedule and suspend changes |
+| **Owner references** | Deleting a BackupSchedule automatically garbage-collects its CronJob |
+| **Status propagation** | `lastSuccessTime` / `lastFailureTime` / `lastScheduleTime` kept in sync via Job label watch |
+| **Suspend / resume** | Patch `spec.suspend: true/false` without recreating anything |
+| **History limits** | `failedJobsHistoryLimit` and `successfulJobsHistoryLimit` pass through to the CronJob |
+| **ConcurrencyPolicy** | Always `ForbidConcurrent` — the distributed lock is a second safety layer |
+| **Restore TTL** | `ttlSecondsAfterFinished` removes the completed Job automatically |
+| **createDB** | Restore can issue `CREATE DATABASE` before applying the dump |
+| **All notifiers** | Slack, Discord, Teams, generic Webhook, Stdout via `notifications` block |
+| **All storage backends** | S3 (+ IRSA), Azure Blob (+ SAS), GCS (+ Workload Identity) |
+| **Image override** | `spec.image` overrides the default image per schedule |
+
+### Deploy the operator
+
+```sh
+cd operator
+make install          # apply CRDs to the cluster
+make deploy IMG=ghcr.io/cloudscript-technology/dumpscript-operator:latest
+```
+
+See [`docs/operator/`](./docs/operator/) for the full CRD reference and
+secret layout.
+
+---
+
 ## Image build options
 
 The single `docker/Dockerfile` is parameterised:
@@ -482,6 +633,8 @@ Everything runs through `make`. Run `make help` for the colorised target list.
 | `make e2e-engines`              | All engines except mysql57 (amd64 emulation is slow) |
 | `make e2e-features`             | Azure, lock, retention, Slack                        |
 | `make e2e-one NAME=TestMongo`   | A single test by name                                |
+| `make e2e-kind`                 | Kind cluster e2e — operator + S3 (Terragrunt) + PostgreSQL |
+| `make e2e-kind-deps`            | Download Go deps for the kind e2e module (run once)  |
 
 ### Housekeeping
 
@@ -530,6 +683,36 @@ built image against them. See `tests/e2e/README.md` for details.
 | `TestRetention`                              | Seed old objects → cleanup removes only the old       |
 | `TestSlackNotification`                      | Fake webhook captures failure payload                 |
 
+### Kind E2E — operator integration (31 specs)
+
+`make e2e-kind` spins up a real kind cluster, deploys the operator,
+provisions an S3 bucket with Terragrunt (LocalStack), runs PostgreSQL,
+and validates the full operator→dumpscript pipeline.  
+Requires: `kind`, `kubectl`, `docker`/`podman`, `terragrunt`.
+
+```
+kind cluster
+  ├── dumpscript-e2e namespace
+  │   ├── LocalStack 4   (S3 endpoint)  ←── Terragrunt creates bucket
+  │   └── PostgreSQL 17
+  └── dumpscript-operator-system namespace
+      └── operator (controller-manager)
+              │ reconciles CRs
+              ▼
+        BackupSchedule → CronJob → Job → dumpscript → S3
+        Restore        → Job → dumpscript ← S3 → PostgreSQL
+```
+
+| Group | Specs | Feature validated |
+|---|---|---|
+| **Fluxo principal** | 7 | BackupSchedule→CronJob, backup upload, Restore, acumulação de objetos |
+| **Ciclo de vida** | 7 | suspend/resume, mudança de schedule, cascade delete, status (lastSuccessTime, lastScheduleTime), restart do operator |
+| **Features avançadas** | 8 | S3 prefix, notificação stdout, history limits, múltiplos BackupSchedules, Restore createDB, Restore TTL |
+| **Retention & lock** | 10 | retentionDays sweep, preservação de backup atual, lock contention gracioso, weekly periodicity, suspend-from-creation, status.jobName/startedAt/completedAt, lastFailureTime |
+
+See [`docs/operations/kind-e2e.md`](./docs/operations/kind-e2e.md) for the
+full spec inventory, environment diagram, helper reference and CI snippet.
+
 ---
 
 ## Project layout
@@ -538,24 +721,38 @@ built image against them. See `tests/e2e/README.md` for details.
 dumpscript/
 ├── cmd/dumpscript/           Main entry point (wiring only)
 ├── docker/Dockerfile         Alpine multi-stage image build
-├── docs/                     Topic-specific docs (Slack, etc.)
-├── examples/                 Helm chart values samples
+├── docs/                     Full reference docs (operator, storage, features, …)
+├── examples/                 Helm chart values samples + operator CR samples
 ├── internal/
 │   ├── awsauth/              IRSA WebIdentity credential provider
 │   ├── cli/                  Cobra subcommands (dump/restore/cleanup)
 │   ├── clock/                Injectable clock interface
 │   ├── config/               envconfig loader + validation
-│   ├── dumper/               Strategy per engine (pg/mysql/mariadb/mongo) + Factory
+│   ├── dumper/               Strategy per engine + Factory (13 engines)
 │   ├── lock/                 Distributed `.lock` service + execution IDs
-│   ├── notify/               Observer: Slack + Noop
+│   ├── logging/              Structured logging (slog — pretty + JSON)
+│   ├── metrics/              Prometheus metrics (Pushgateway)
+│   ├── notify/               Multi-notifier: Slack / Discord / Teams / Webhook / Stdout
 │   ├── pipeline/             Template Method: dump & restore workflows
 │   ├── restorer/             Strategy per engine for restore + Factory
 │   ├── retention/            Path-date based cleanup
-│   ├── storage/              Strategy (S3/Azure) + Adapter + Retry/Logging Decorators
+│   ├── storage/              Strategy (S3/Azure/GCS) + Adapter + Retry/Logging Decorators
 │   └── verifier/             Strategy per engine for content verification
-├── tests/e2e/                testcontainers-go e2e suite (build tag `e2e`)
+├── operator/                 Kubebuilder-based Kubernetes operator
+│   ├── api/v1alpha1/         CRD types: BackupSchedule, Restore
+│   ├── cmd/main.go           Operator entry point
+│   ├── config/               Kustomize manifests (CRDs, RBAC, manager deployment)
+│   ├── internal/controller/  BackupScheduleReconciler + RestoreReconciler
+│   └── test/e2e/             Ginkgo operator smoke tests
+├── tests/
+│   ├── e2e/                  testcontainers-go e2e suite (build tag `e2e`)
+│   └── kind-e2e/             Kind cluster e2e — operator + Terragrunt + PostgreSQL
+│       ├── terraform/        S3 bucket (LocalStack) via Terraform
+│       ├── manifests/        LocalStack + PostgreSQL K8s manifests
+│       └── terragrunt.hcl    Terragrunt config (state in /tmp)
 ├── Makefile
-└── go.mod
+├── go.mod                    Main module
+└── operator/go.mod           Operator module (separate)
 ```
 
 ---
