@@ -80,6 +80,7 @@ See [engines index](./engines/README.md) for the full matrix and picker.
 - [Kubernetes / CronJob](./operations/kubernetes.md) — recommended deployment
 - [Docker image](./operations/docker_image.md) — build flags, sizes, pinning
 - [Testing](./operations/testing.md) — unit + e2e + kind e2e (operator + Terragrunt + restore)
+- [Kind E2E reference](./operations/kind-e2e.md) — 31 specs, ambiente, helpers, CI
 
 ---
 

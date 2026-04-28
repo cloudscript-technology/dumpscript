@@ -156,6 +156,10 @@ locais do K8s — `make` os instala automaticamente em `operator/bin/`.
 
 ## Kind E2E (fluxo completo de operador)
 
+> Documentação detalhada: [**kind-e2e.md**](./kind-e2e.md) — lista completa dos
+> 31 specs, diagrama do ambiente, helpers, troubleshooting e CI.
+
+
 Testa o fluxo de ponta a ponta num cluster Kubernetes real:
 
 ```
