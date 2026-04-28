@@ -23,6 +23,10 @@ var _ = Describe("BackupSchedule → S3 → Restore", Ordered, func() {
 	// backupKey is set after the backup job succeeds and used by the Restore test.
 	var backupKey string
 
+	// Use a dedicated S3 prefix so backup objects from other Describe blocks
+	// (prefix-e2e, notify-e2e, etc.) don't interfere when searching backupKey.
+	const schedulePrefix = "main-e2e"
+
 	backupSchedule := fmt.Sprintf(`
 apiVersion: dumpscript.cloudscript.com.br/v1alpha1
 kind: BackupSchedule
@@ -45,11 +49,12 @@ spec:
     backend: s3
     s3:
       bucket: %s
+      prefix: "%s"
       region: us-east-1
       endpointURL: %s
       credentialsSecretRef:
         name: aws-credentials
-`, scheduleName, testNamespace, dumpscriptImg, testNamespace, bucketName, localstackInCluster)
+`, scheduleName, testNamespace, dumpscriptImg, testNamespace, bucketName, schedulePrefix, localstackInCluster)
 
 	BeforeAll(func() {
 		By("seeding PostgreSQL with a marker row")
@@ -114,16 +119,15 @@ spec:
 		objects, _ = listS3Objects(bucketName)
 		GinkgoWriter.Printf("S3 objects: %v\n", objects)
 
-		By("verifying path structure: <periodicity>/YYYY/MM/DD/dump_*.sql.gz")
+		By("verifying path structure: main-e2e/daily/YYYY/MM/DD/dump_*.sql.gz")
 		for _, key := range objects {
-			// S3_PREFIX is not set so the key starts directly with the periodicity.
-			if strings.HasPrefix(key, "daily/") && strings.HasSuffix(key, ".gz") {
+			if strings.HasPrefix(key, schedulePrefix+"/daily/") && strings.HasSuffix(key, ".gz") {
 				backupKey = key
 				break
 			}
 		}
 		Expect(backupKey).NotTo(BeEmpty(),
-			"expected an object matching daily/**/*.gz, got: %v", objects)
+			"expected an object matching %s/daily/**/*.gz, got: %v", schedulePrefix, objects)
 	})
 
 	It("operator reconciles Restore → Job and data is recovered", func() {

@@ -3,6 +3,9 @@
 package kinde2e_test
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -183,6 +186,66 @@ func pgPodName() string {
 		"-l", "app=postgres",
 		"-n", testNamespace,
 		"-o", "jsonpath={.items[0].metadata.name}")
+}
+
+// seedS3Object PUTs an empty object at key in the test bucket via the
+// LocalStack port-forward. Uses a manually constructed AWS Signature V4 so no
+// SDK dependency is needed and no extra pod has to be pulled into the cluster.
+func seedS3Object(key string) {
+	GinkgoHelper()
+
+	now := time.Now().UTC()
+	dateTime := now.Format("20060102T150405Z")
+	date := now.Format("20060102")
+
+	const (
+		region       = "us-east-1"
+		service      = "s3"
+		accessKey    = "test"
+		secretKey    = "test"
+		payloadHash  = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" // sha256("")
+	)
+
+	host := "localhost:" + lsLocalPort
+	urlPath := "/" + bucketName + "/" + key
+
+	canonicalHeaders := "host:" + host + "\n" +
+		"x-amz-content-sha256:" + payloadHash + "\n" +
+		"x-amz-date:" + dateTime + "\n"
+	signedHeaders := "host;x-amz-content-sha256;x-amz-date"
+	canonicalRequest := strings.Join([]string{
+		"PUT", urlPath, "",
+		canonicalHeaders, signedHeaders, payloadHash,
+	}, "\n")
+
+	credScope := date + "/" + region + "/" + service + "/aws4_request"
+	crHash := sha256.Sum256([]byte(canonicalRequest))
+	stringToSign := "AWS4-HMAC-SHA256\n" + dateTime + "\n" + credScope + "\n" +
+		hex.EncodeToString(crHash[:])
+
+	mac := func(key, msg []byte) []byte {
+		h := hmac.New(sha256.New, key)
+		h.Write(msg)
+		return h.Sum(nil)
+	}
+	sigKey := mac(mac(mac(mac([]byte("AWS4"+secretKey), []byte(date)), []byte(region)), []byte(service)), []byte("aws4_request"))
+	sig := hex.EncodeToString(mac(sigKey, []byte(stringToSign)))
+
+	auth := "AWS4-HMAC-SHA256 Credential=" + accessKey + "/" + credScope +
+		",SignedHeaders=" + signedHeaders + ",Signature=" + sig
+
+	req, err := http.NewRequest("PUT", "http://"+host+urlPath, http.NoBody)
+	Expect(err).NotTo(HaveOccurred())
+	req.Header.Set("x-amz-date", dateTime)
+	req.Header.Set("x-amz-content-sha256", payloadHash)
+	req.Header.Set("Authorization", auth)
+	req.ContentLength = 0
+
+	resp, err := http.DefaultClient.Do(req)
+	Expect(err).NotTo(HaveOccurred())
+	defer resp.Body.Close()
+	Expect(resp.StatusCode).To(BeNumerically("<", 300),
+		"seed S3 object %q: HTTP %d", key, resp.StatusCode)
 }
 
 // psql runs a SQL statement via psql inside the postgres pod.
