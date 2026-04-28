@@ -50,6 +50,9 @@ func buildCronJob(bs *dumpscriptv1alpha1.BackupSchedule) *batchv1.CronJob {
 			SuccessfulJobsHistoryLimit: successHist,
 			FailedJobsHistoryLimit:     failHist,
 			JobTemplate: batchv1.JobTemplateSpec{
+				// Labels on the Job object (not just the Pod) let refreshStatus
+				// find and correlate Jobs back to their BackupSchedule.
+				ObjectMeta: metav1.ObjectMeta{Labels: cronLabels(bs.Name)},
 				Spec: batchv1.JobSpec{
 					BackoffLimit: int32Ptr(0),
 					Template: corev1.PodTemplateSpec{

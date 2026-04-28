@@ -23,9 +23,12 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	dumpscriptv1alpha1 "github.com/cloudscript-technology/dumpscript/operator/api/v1alpha1"
@@ -122,12 +125,30 @@ func (r *BackupScheduleReconciler) refreshStatus(ctx context.Context, bs *dumpsc
 	return r.Status().Update(ctx, bs)
 }
 
-// SetupWithManager sets up the controller with the Manager. Owns the
-// generated CronJob so changes there re-trigger Reconcile.
+// SetupWithManager sets up the controller with the Manager.
+// Owns CronJobs so spec/status changes re-trigger Reconcile.
+// Also watches Jobs labelled with the schedule name so that Job
+// completion events update LastSuccessTime / LastFailureTime promptly.
 func (r *BackupScheduleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&dumpscriptv1alpha1.BackupSchedule{}).
 		Owns(&batchv1.CronJob{}).
+		Watches(
+			&batchv1.Job{},
+			handler.EnqueueRequestsFromMapFunc(r.jobToSchedule),
+		).
 		Named("backupschedule").
 		Complete(r)
+}
+
+// jobToSchedule maps a Job back to its owning BackupSchedule using the
+// "dumpscript.cloudscript.com.br/schedule" label set by buildCronJob.
+func (r *BackupScheduleReconciler) jobToSchedule(_ context.Context, obj client.Object) []reconcile.Request {
+	name, ok := obj.GetLabels()["dumpscript.cloudscript.com.br/schedule"]
+	if !ok {
+		return nil
+	}
+	return []reconcile.Request{{
+		NamespacedName: types.NamespacedName{Name: name, Namespace: obj.GetNamespace()},
+	}}
 }

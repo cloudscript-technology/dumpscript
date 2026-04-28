@@ -192,11 +192,78 @@ spec:
 		Expect(out).To(ContainSubstring("kind-e2e-marker"))
 	})
 
+	It("second manual Job produces a second S3 object", func() {
+		jobName := fmt.Sprintf("postgres-e2e-manual2-%d", time.Now().Unix())
+
+		By("triggering a second backup job")
+		run("kubectl", "create", "job", jobName,
+			"--from=cronjob/"+scheduleName, "-n", testNamespace)
+
+		By("waiting for the second job to complete")
+		Eventually(func() string {
+			out, _ := runOutput("kubectl", "get", "job", jobName,
+				"-n", testNamespace,
+				"-o", `jsonpath={.status.conditions[?(@.type=="Complete")].status}`)
+			return out
+		}, 5*time.Minute, 5*time.Second).Should(Equal("True"))
+
+		By("verifying at least 2 backup objects exist in S3")
+		Eventually(func() int {
+			objects, _ := listS3Objects(bucketName)
+			return len(objects)
+		}, 30*time.Second, 3*time.Second).Should(BeNumerically(">=", 2))
+	})
+
 	AfterAll(func() {
 		By("cleaning up CRs")
 		runOutput("kubectl", "delete", "backupschedule", scheduleName, //nolint:errcheck
 			"-n", testNamespace, "--ignore-not-found")
 		runOutput("kubectl", "delete", "restore", restoreName, //nolint:errcheck
 			"-n", testNamespace, "--ignore-not-found")
+	})
+})
+
+// ── Restore edge cases ────────────────────────────────────────────────────────
+
+var _ = Describe("Restore edge cases", func() {
+	It("Restore with invalid sourceKey sets phase=Failed", func() {
+		const name = "restore-bad-key"
+
+		restore := fmt.Sprintf(`
+apiVersion: dumpscript.cloudscript.com.br/v1alpha1
+kind: Restore
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  sourceKey: "nonexistent/path/does-not-exist.sql.gz"
+  image: %s
+  database:
+    type: postgresql
+    host: postgres.%s.svc.cluster.local
+    name: testdb
+    credentialsSecretRef:
+      name: postgres-credentials
+  storage:
+    backend: s3
+    s3:
+      bucket: %s
+      region: us-east-1
+      endpointURL: %s
+      credentialsSecretRef:
+        name: aws-credentials
+`, name, testNamespace, dumpscriptImg, testNamespace, bucketName, localstackInCluster)
+
+		By("applying Restore CR with a non-existent source key")
+		applyManifest(restore)
+		defer runOutput("kubectl", "delete", "restore", name, //nolint:errcheck
+			"-n", testNamespace, "--ignore-not-found")
+
+		By("waiting for Restore phase=Failed")
+		Eventually(func() string {
+			phase, _ := runOutput("kubectl", "get", "restore", name,
+				"-n", testNamespace, "-o", "jsonpath={.status.phase}")
+			return phase
+		}, 3*time.Minute, 5*time.Second).Should(Equal("Failed"))
 	})
 })
