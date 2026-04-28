@@ -45,8 +45,13 @@ func TestBuildNotifier_ChoosesCorrectType(t *testing.T) {
 	t.Run("webhook set → slack", func(t *testing.T) {
 		cfg := &config.Config{Slack: config.Slack{WebhookURL: "https://hooks.slack.com/services/x"}}
 		n := buildNotifier(cfg, quietLogger())
-		if _, ok := n.(*notify.Slack); !ok {
-			t.Errorf("got %T, want *notify.Slack", n)
+		// Factory wraps every enabled notifier in *notify.Retrying; unwrap.
+		r, ok := n.(*notify.Retrying)
+		if !ok {
+			t.Fatalf("got %T, want *notify.Retrying", n)
+		}
+		if _, ok := r.Inner().(*notify.Slack); !ok {
+			t.Errorf("inner = %T, want *notify.Slack", r.Inner())
 		}
 	})
 }

@@ -98,6 +98,21 @@ func (p *Dump) Run(ctx context.Context) (retErr error) {
 		return err
 	}
 
+	// Dry-run short-circuit: validation + reachability already passed; skip
+	// the actual dump and upload. Useful to verify a freshly applied
+	// BackupSchedule without writing data anywhere.
+	if p.d.Config.DryRun {
+		log.Info("│   ✔ dry-run: skipping dump + upload",
+			"db_type", p.d.Config.DB.Type, "host", p.d.Config.DB.Host)
+		p.d.Metrics.RecordRun(metrics.ResultSuccess)
+		_ = p.d.Notifier.Notify(ctx, notify.Event{
+			Kind:        notify.EventSuccess,
+			ExecutionID: execID,
+			Context:     "dry-run: validated config + destination reachability",
+		})
+		return nil
+	}
+
 	now := p.d.Clock.Now()
 	lockKey := storage.LockKey(p.d.Config, now)
 
@@ -152,10 +167,12 @@ func (p *Dump) preflight(ctx context.Context, log *slog.Logger) error {
 
 // acquireLock tries to write the day-level .lock file. Returns (skipped=true)
 // when another run already holds it — callers must treat that as a successful
-// no-op (exit 0, EventSkipped).
+// no-op (exit 0, EventSkipped). Stale locks older than Config.LockGracePeriod
+// are taken over with a warning so a crashed previous run doesn't jam every
+// future scheduled execution.
 func (p *Dump) acquireLock(ctx context.Context, log *slog.Logger, lockKey, execID string) (bool, error) {
-	log.Info("├─ [2/4] acquire lock", "key", lockKey)
-	if err := lock.Acquire(ctx, p.d.Storage, lockKey, lock.NewInfo(execID)); err != nil {
+	log.Info("├─ [2/4] acquire lock", "key", lockKey, "grace", p.d.Config.LockGracePeriod)
+	if err := lock.AcquireWithGrace(ctx, p.d.Storage, lockKey, lock.NewInfo(execID), p.d.Config.LockGracePeriod, log); err != nil {
 		if errors.Is(err, lock.ErrLocked) {
 			display := p.d.Storage.DisplayPath(lockKey)
 			log.Warn("│   ⚠ another backup in progress; skipping this run", "lock", display)

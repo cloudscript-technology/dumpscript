@@ -47,11 +47,17 @@ func New(cfg *config.Config, log *slog.Logger) Notifier {
 
 	enabled := make([]Notifier, 0, len(ctors))
 	enabledNames := make([]string, 0, len(ctors))
+	retryCfg := DefaultRetryConfig()
 	for i, c := range ctors {
 		n, ok := c(cfg, log)
 		if !ok || n == nil {
 			continue
 		}
+		// Wrap each enabled notifier with retry so a transient 5xx from
+		// Slack/Discord/Teams/Webhook doesn't drop the notification on the
+		// floor on the first hiccup. Stdout doesn't fail in practice but
+		// going through the decorator is harmless.
+		n = NewRetrying(n, retryCfg, log, names[i])
 		enabled = append(enabled, n)
 		enabledNames = append(enabledNames, names[i])
 	}

@@ -39,7 +39,10 @@ func newCleanupCmd(log *slog.Logger) *cobra.Command {
 				return err
 			}
 
-			cleaner := retention.New(store, log)
+			cleaner := retention.New(store, log).WithDryRun(cfg.DryRun)
+			if cfg.DryRun {
+				log.Info("dry-run mode: deletions will be logged but skipped")
+			}
 			prefix := storage.PeriodPrefix(cfg)
 			_, err = cleaner.Run(ctx, prefix, cfg.RetentionDays, time.Now())
 			return err

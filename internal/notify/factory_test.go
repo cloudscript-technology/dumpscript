@@ -49,8 +49,14 @@ func TestFactory_NoneEnabled_ReturnsNoop(t *testing.T) {
 func TestFactory_OneEnabled_ReturnsThatNotifier(t *testing.T) {
 	cfg := &config.Config{Slack: config.Slack{WebhookURL: "https://hooks.example/abc"}}
 	n := New(cfg, quietLogger())
-	if _, ok := n.(*Slack); !ok {
-		t.Errorf("got %T, want *Slack", n)
+	// Factory wraps every enabled notifier in a Retrying decorator (see
+	// retry.go); unwrap before asserting the underlying type.
+	r, ok := n.(*Retrying)
+	if !ok {
+		t.Fatalf("got %T, want *Retrying", n)
+	}
+	if _, ok := r.Inner().(*Slack); !ok {
+		t.Errorf("inner = %T, want *Slack", r.Inner())
 	}
 }
 

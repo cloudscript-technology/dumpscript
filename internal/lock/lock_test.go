@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
 	"os"
 	"regexp"
 	"testing"
@@ -36,7 +38,15 @@ func (s *stubStorage) UploadBytes(_ context.Context, data []byte, key string) er
 	s.existsMap[key] = true
 	return nil
 }
-func (s *stubStorage) Download(_ context.Context, _, _ string) error { return nil }
+func (s *stubStorage) Download(_ context.Context, key, localPath string) error {
+	data := s.uploadedData
+	if data == nil {
+		// Fall back to existsMap-only entries with empty body. AcquireWithGrace
+		// will treat unparseable JSON as stale, which the tests rely on.
+		data = []byte{}
+	}
+	return os.WriteFile(localPath, data, 0o600)
+}
 func (s *stubStorage) List(_ context.Context, _ string) ([]storage.Object, error) {
 	return nil, nil
 }
@@ -161,6 +171,68 @@ func TestNewExecutionID_Format(t *testing.T) {
 	re := regexp.MustCompile(`^[0-9a-f]{16}$`)
 	if !re.MatchString(id) {
 		t.Errorf("id %q does not match 16-hex format", id)
+	}
+}
+
+func TestAcquireWithGrace_TakesOverStaleLock(t *testing.T) {
+	st := &stubStorage{existsMap: map[string]bool{"lk": true}}
+	stale := Info{ExecutionID: "old", StartedAt: time.Now().Add(-48 * time.Hour)}
+	st.uploadedData, _ = json.Marshal(stale)
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if err := AcquireWithGrace(context.Background(), st, "lk", NewInfo("new"), 24*time.Hour, logger); err != nil {
+		t.Fatalf("expected stale takeover to succeed, got %v", err)
+	}
+	// After takeover, uploadedData should be the new info.
+	var got Info
+	if err := json.Unmarshal(st.uploadedData, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.ExecutionID != "new" {
+		t.Errorf("ExecutionID = %q, want new", got.ExecutionID)
+	}
+}
+
+func TestAcquireWithGrace_FreshLockReturnsErrLocked(t *testing.T) {
+	st := &stubStorage{existsMap: map[string]bool{"lk": true}}
+	fresh := Info{ExecutionID: "running", StartedAt: time.Now().Add(-5 * time.Minute)}
+	st.uploadedData, _ = json.Marshal(fresh)
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	err := AcquireWithGrace(context.Background(), st, "lk", NewInfo("new"), 24*time.Hour, logger)
+	if !errors.Is(err, ErrLocked) {
+		t.Fatalf("err = %v, want ErrLocked for fresh lock", err)
+	}
+}
+
+func TestAcquireWithGrace_GraceZeroIsStrictMode(t *testing.T) {
+	st := &stubStorage{existsMap: map[string]bool{"lk": true}}
+	stale := Info{ExecutionID: "old", StartedAt: time.Now().Add(-72 * time.Hour)}
+	st.uploadedData, _ = json.Marshal(stale)
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	err := AcquireWithGrace(context.Background(), st, "lk", NewInfo("new"), 0, logger)
+	if !errors.Is(err, ErrLocked) {
+		t.Fatalf("err = %v, want ErrLocked when grace=0", err)
+	}
+}
+
+func TestAcquireWithGrace_MalformedLockTreatedAsStale(t *testing.T) {
+	st := &stubStorage{existsMap: map[string]bool{"lk": true}}
+	st.uploadedData = []byte("not-json{{{")
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	err := AcquireWithGrace(context.Background(), st, "lk", NewInfo("new"), 24*time.Hour, logger)
+	if err != nil {
+		t.Fatalf("malformed lock should be taken over, got err=%v", err)
+	}
+	// Verify the new lock content was written.
+	var got Info
+	if jsonErr := json.Unmarshal(st.uploadedData, &got); jsonErr != nil {
+		t.Fatal(jsonErr)
+	}
+	if got.ExecutionID != "new" {
+		t.Errorf("ExecutionID = %q, want new", got.ExecutionID)
 	}
 }
 

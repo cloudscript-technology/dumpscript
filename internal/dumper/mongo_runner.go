@@ -35,5 +35,9 @@ func runMongoDump(cmd *exec.Cmd, outPath string) (*Artifact, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Artifact{Path: outPath, Size: fi.Size(), Extension: "archive"}, nil
+	sum, err := fileSHA256(outPath)
+	if err != nil {
+		return nil, fmt.Errorf("checksum: %w", err)
+	}
+	return &Artifact{Path: outPath, Size: fi.Size(), Extension: "archive", Checksum: sum}, nil
 }

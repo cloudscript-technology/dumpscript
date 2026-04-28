@@ -71,6 +71,12 @@ type S3 struct {
 	EndpointURL     string `envconfig:"AWS_S3_ENDPOINT_URL"`
 	StorageClass    string `envconfig:"S3_STORAGE_CLASS"`
 	Key             string `envconfig:"S3_KEY"`
+
+	// SSE — server-side encryption algorithm. One of "" (none), "AES256",
+	// "aws:kms". When set to "aws:kms", SSEKMSKeyID may be set; if empty,
+	// the bucket's default KMS key is used.
+	SSE         string `envconfig:"S3_SSE"`
+	SSEKMSKeyID string `envconfig:"S3_SSE_KMS_KEY_ID"`
 }
 
 type Azure struct {
@@ -171,6 +177,30 @@ type Config struct {
 	VerifyContent  bool           `envconfig:"VERIFY_CONTENT"  default:"true"`
 	DumpTimeout    time.Duration  `envconfig:"DUMP_TIMEOUT"    default:"2h"`
 	RestoreTimeout time.Duration  `envconfig:"RESTORE_TIMEOUT" default:"2h"`
+
+	// DumpRetries — how many times to retry a failed dump (1 = single attempt).
+	// Useful when the source DB is mid-failover or the network is flaky.
+	DumpRetries        int           `envconfig:"DUMP_RETRIES"          default:"3"`
+	DumpRetryBackoff   time.Duration `envconfig:"DUMP_RETRY_BACKOFF"    default:"5s"`
+	DumpRetryMaxBackoff time.Duration `envconfig:"DUMP_RETRY_MAX_BACKOFF" default:"5m"`
+
+	// DryRun — when true, the dump pipeline validates configuration and
+	// connectivity but skips the actual database dump and storage upload.
+	DryRun bool `envconfig:"DRY_RUN" default:"false"`
+
+	// CompressionType — gzip (default, backwards-compatible) or zstd.
+	CompressionType string `envconfig:"COMPRESSION_TYPE" default:"gzip"`
+
+	// LockGracePeriod — when a stale lock exists in storage and is older than
+	// this, dumpscript overwrites it instead of failing. 0 disables stale-lock
+	// recovery (current behavior).
+	LockGracePeriod time.Duration `envconfig:"LOCK_GRACE_PERIOD" default:"24h"`
+
+	// MetricsListen — when set (e.g. ":9090"), the binary spawns an HTTP
+	// listener on that address serving promhttp.Handler() at /metrics.
+	// Useful for daemon-mode deployments; CronJobs can leave it empty and
+	// rely on the operator's own metrics endpoint.
+	MetricsListen string `envconfig:"METRICS_LISTEN" default:""`
 }
 
 // Load reads the configuration from environment variables.

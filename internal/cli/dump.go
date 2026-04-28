@@ -38,6 +38,13 @@ func newDumpCmd(log *slog.Logger) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// Wrap with retry decorator so transient failures (network blip,
+			// brief DB unavailability) get a second chance.
+			d = dumper.NewRetrying(d, dumper.RetryConfig{
+				MaxAttempts:    cfg.DumpRetries,
+				InitialBackoff: cfg.DumpRetryBackoff,
+				MaxBackoff:     cfg.DumpRetryMaxBackoff,
+			}, log)
 			v, err := verifier.New(cfg, log)
 			if err != nil {
 				return err
@@ -54,6 +61,17 @@ func newDumpCmd(log *slog.Logger) *cobra.Command {
 			}
 
 			mx := metrics.New(cfg, log)
+			// When METRICS_LISTEN is set and the active metrics impl is the
+			// Prometheus one, expose it via HTTP so a scraper can pull it
+			// directly. CronJob-style runs typically leave this empty and
+			// rely on the operator's metrics endpoint instead.
+			if cfg.MetricsListen != "" {
+				if p, ok := mx.(*metrics.Prom); ok {
+					metrics.ServeMetrics(cfg.MetricsListen, p.Registry(), log)
+				} else {
+					log.Warn("METRICS_LISTEN set but metrics implementation is not Prometheus; ignoring")
+				}
+			}
 
 			p := pipeline.NewDump(pipeline.DumpDeps{
 				Config:   cfg,

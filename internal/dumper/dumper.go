@@ -4,20 +4,33 @@ package dumper
 import (
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strings"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 // Artifact is a compressed dump file on local disk produced by a Dumper.
+//
+// Checksum is the lower-case hex SHA-256 of the on-disk file and is computed
+// by the runner after the dump completes successfully. Storage backends carry
+// it through to the uploaded object's metadata so a future Restore can verify
+// the artifact end-to-end before applying it.
 type Artifact struct {
 	Path      string
 	Size      int64
 	Extension string
+	Checksum  string
 }
 
-// Verify checks that the gzip stream is readable and not empty.
+// Verify checks that the compressed stream (gzip or zstd) is readable and not
+// empty. The codec is detected from the file extension to keep the call site
+// simple — extensions are owned by dumpFilename above.
 func (a *Artifact) Verify() error {
 	fi, err := os.Stat(a.Path)
 	if err != nil {
@@ -31,16 +44,47 @@ func (a *Artifact) Verify() error {
 		return err
 	}
 	defer f.Close()
-	gr, err := gzip.NewReader(f)
-	if err != nil {
-		return fmt.Errorf("corrupt gzip: %w", err)
+
+	var rc io.ReadCloser
+	switch {
+	case strings.HasSuffix(a.Path, ".zst"):
+		zr, err := zstd.NewReader(f)
+		if err != nil {
+			return fmt.Errorf("corrupt zstd: %w", err)
+		}
+		rc = zr.IOReadCloser()
+	default:
+		gr, err := gzip.NewReader(f)
+		if err != nil {
+			return fmt.Errorf("corrupt gzip: %w", err)
+		}
+		rc = gr
 	}
-	defer gr.Close()
+	defer rc.Close()
+
 	buf := make([]byte, 512)
-	if _, err := gr.Read(buf); err != nil && !errors.Is(err, io.EOF) {
-		return fmt.Errorf("read gzip: %w", err)
+	if _, err := rc.Read(buf); err != nil && !errors.Is(err, io.EOF) {
+		return fmt.Errorf("read compressed stream: %w", err)
 	}
 	return nil
+}
+
+// fileSHA256 computes the lower-case hex SHA-256 of a file's contents.
+// Returns "" + nil when the path is empty so callers don't need to special-case.
+func fileSHA256(path string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // Cleanup removes the dump file.

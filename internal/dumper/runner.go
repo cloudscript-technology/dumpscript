@@ -1,7 +1,6 @@
 package dumper
 
 import (
-	"compress/gzip"
 	"fmt"
 	"io"
 	"os"
@@ -12,15 +11,32 @@ import (
 	"github.com/cloudscript-technology/dumpscript/internal/xerrors"
 )
 
-// dumpFilename returns e.g. ${workDir}/dump_20250324_120000.sql.gz
+// dumpFilename returns e.g. ${workDir}/dump_20250324_120000.sql.gz. The base
+// suffix is always ".gz" — runners that respect COMPRESSION_TYPE will rewrite
+// the suffix to ".zst" when zstd is selected. Engines whose CLI output is
+// already a fixed format (mongodump's gzipped archive, etcdctl's binary
+// snapshot) keep the .gz suffix regardless.
 func dumpFilename(workDir, ext string, now time.Time) string {
 	return filepath.Join(workDir, fmt.Sprintf("dump_%s.%s.gz", now.Format("20060102_150405"), ext))
 }
 
+// adjustSuffixForCompression swaps the trailing .gz on outPath for the suffix
+// matching the active compression codec. Returns the (possibly unchanged) path.
+func adjustSuffixForCompression(outPath string, k CompressionKind) string {
+	target := compressionSuffix(k)
+	if target == ".gz" {
+		return outPath
+	}
+	return outPath[:len(outPath)-len(".gz")] + target
+}
+
 // runNativeDump is used by engines that produce their dump in pure Go (e.g.
 // HTTP-based sources like Elasticsearch). `write` is called with a writer that
-// gzip-compresses into outPath. On any error the partial file is removed.
+// compresses into outPath using the configured codec (gzip default, zstd when
+// COMPRESSION_TYPE=zstd). On any error the partial file is removed.
 func runNativeDump(write func(w io.Writer) error, outPath, ext string) (*Artifact, error) {
+	codec := resolveCompression()
+	outPath = adjustSuffixForCompression(outPath, codec)
 	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
 		return nil, fmt.Errorf("mkdir: %w", err)
 	}
@@ -28,7 +44,11 @@ func runNativeDump(write func(w io.Writer) error, outPath, ext string) (*Artifac
 	if err != nil {
 		return nil, fmt.Errorf("create dump file: %w", err)
 	}
-	gw := gzip.NewWriter(f)
+	gw, err := newCompressor(f, codec)
+	if err != nil {
+		f.Close() //nolint:errcheck
+		return nil, fmt.Errorf("compressor: %w", err)
+	}
 
 	writeErr := write(gw)
 	gzErr := gw.Close()
@@ -42,7 +62,11 @@ func runNativeDump(write func(w io.Writer) error, outPath, ext string) (*Artifac
 	if err != nil {
 		return nil, err
 	}
-	return &Artifact{Path: outPath, Size: fi.Size(), Extension: ext}, nil
+	sum, err := fileSHA256(outPath)
+	if err != nil {
+		return nil, fmt.Errorf("checksum: %w", err)
+	}
+	return &Artifact{Path: outPath, Size: fi.Size(), Extension: ext, Checksum: sum}, nil
 }
 
 // runDumpViaTempFile is used by engines whose CLI cannot write to stdout
@@ -77,9 +101,13 @@ func runDumpViaTempFile(produce func(tmpPath string) error, outPath, ext string)
 	}, outPath, ext)
 }
 
-// runDumpWithGzip wires cmd.Stdout through gzip.Writer → file, runs the command,
-// and returns an Artifact. On any error it removes the partial file.
+// runDumpWithGzip wires cmd.Stdout through the configured compressor → file,
+// runs the command, and returns an Artifact. The function name is preserved
+// for backwards compat; the actual codec depends on COMPRESSION_TYPE.
+// On any error it removes the partial file.
 func runDumpWithGzip(cmd *exec.Cmd, outPath, ext string) (*Artifact, error) {
+	codec := resolveCompression()
+	outPath = adjustSuffixForCompression(outPath, codec)
 	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
 		return nil, fmt.Errorf("mkdir: %w", err)
 	}
@@ -88,7 +116,11 @@ func runDumpWithGzip(cmd *exec.Cmd, outPath, ext string) (*Artifact, error) {
 		return nil, fmt.Errorf("create dump file: %w", err)
 	}
 
-	gw := gzip.NewWriter(f)
+	gw, err := newCompressor(f, codec)
+	if err != nil {
+		f.Close() //nolint:errcheck
+		return nil, fmt.Errorf("compressor: %w", err)
+	}
 	cmd.Stdout = gw
 	cmd.Stderr = os.Stderr
 
@@ -105,6 +137,10 @@ func runDumpWithGzip(cmd *exec.Cmd, outPath, ext string) (*Artifact, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Artifact{Path: outPath, Size: fi.Size(), Extension: ext}, nil
+	sum, err := fileSHA256(outPath)
+	if err != nil {
+		return nil, fmt.Errorf("checksum: %w", err)
+	}
+	return &Artifact{Path: outPath, Size: fi.Size(), Extension: ext, Checksum: sum}, nil
 }
 

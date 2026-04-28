@@ -19,12 +19,21 @@ var backupFileRe = regexp.MustCompile(`\.(sql|archive)(\.gz)?$`)
 
 // Cleaner applies retention policy against a Storage.
 type Cleaner struct {
-	store storage.Storage
-	log   *slog.Logger
+	store  storage.Storage
+	log    *slog.Logger
+	dryRun bool
 }
 
 func New(store storage.Storage, log *slog.Logger) *Cleaner {
 	return &Cleaner{store: store, log: log}
+}
+
+// WithDryRun returns a Cleaner that logs deletions without executing them.
+// Useful for previewing what a retention run would purge.
+func (c *Cleaner) WithDryRun(dryRun bool) *Cleaner {
+	out := *c
+	out.dryRun = dryRun
+	return &out
 }
 
 // Result is a summary of a retention run.
@@ -66,6 +75,11 @@ func (c *Cleaner) Run(ctx context.Context, prefix string, retentionDays int, now
 		}
 		backupDate := m[1] + "-" + m[2] + "-" + m[3]
 		if backupDate < cutoffStr {
+			if c.dryRun {
+				c.log.Info("retention delete (dry-run)", "key", o.Key, "backup_date", backupDate)
+				r.Deleted++
+				continue
+			}
 			c.log.Info("retention delete", "key", o.Key, "backup_date", backupDate)
 			if err := c.store.Delete(ctx, o.Key); err != nil {
 				c.log.Warn("retention delete failed", "key", o.Key, "err", err)
