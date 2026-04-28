@@ -10,6 +10,7 @@ import (
 	"github.com/cloudscript-technology/dumpscript/internal/config"
 	"github.com/cloudscript-technology/dumpscript/internal/restorer"
 	"github.com/cloudscript-technology/dumpscript/internal/storage"
+	"github.com/cloudscript-technology/dumpscript/internal/verifier"
 )
 
 // RestoreDeps aggregates dependencies injected into the restore pipeline.
@@ -51,6 +52,15 @@ func (p *Restore) Run(ctx context.Context) error {
 		"db_type", p.d.Config.DB.Type, "host", p.d.Config.DB.Host, "db_name", p.d.Config.DB.Name)
 	if err := p.d.Restorer.Restore(ctx, local); err != nil {
 		return fmt.Errorf("restore: %w", err)
+	}
+
+	// Post-restore reachability check — confirms the engine is still
+	// answering connections after the import. Helps catch the case where
+	// restore returned 0 but the import actually corrupted/crashed the
+	// engine. Failure here surfaces as a non-zero exit (and Failed phase on
+	// the operator side).
+	if err := verifier.PostRestore(ctx, p.d.Config, p.d.Log); err != nil {
+		return fmt.Errorf("post-restore verify: %w", err)
 	}
 
 	p.d.Log.Info("restore completed", "key", key)

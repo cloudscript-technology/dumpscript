@@ -84,6 +84,9 @@ func (g *GCS) Upload(ctx context.Context, localPath, key string) error {
 	localSize := fi.Size()
 
 	w := g.bucket.Object(key).NewWriter(ctx)
+	if tags := backupTags(g.cfg); len(tags) > 0 {
+		w.Metadata = tags
+	}
 	if _, err := io.Copy(w, f); err != nil {
 		_ = w.Close()
 		return fmt.Errorf("gcs upload copy: %w", err)

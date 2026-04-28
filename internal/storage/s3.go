@@ -134,6 +134,10 @@ func (s *S3) Upload(ctx context.Context, localPath, key string) error {
 	if s.cfg.S3.StorageClass != "" {
 		in.StorageClass = s3types.StorageClass(s.cfg.S3.StorageClass)
 	}
+	applySSE(in, s.cfg.S3)
+	if tagging := encodeS3Tagging(backupTags(s.cfg)); tagging != "" {
+		in.Tagging = aws.String(tagging)
+	}
 	if _, err = s.uploader.Upload(ctx, in); err != nil {
 		return fmt.Errorf("s3 upload: %w", err)
 	}
@@ -166,8 +170,22 @@ func (s *S3) UploadBytes(ctx context.Context, data []byte, key string) error {
 	if s.cfg.S3.StorageClass != "" {
 		in.StorageClass = s3types.StorageClass(s.cfg.S3.StorageClass)
 	}
+	applySSE(in, s.cfg.S3)
 	_, err := s.client.PutObject(ctx, in)
 	return err
+}
+
+// applySSE wires server-side-encryption fields from config into a
+// PutObjectInput. Empty SSE means no SSE; "AES256" enables S3-managed keys;
+// "aws:kms" enables KMS with optional SSEKMSKeyID (bucket default when empty).
+func applySSE(in *s3.PutObjectInput, cfg config.S3) {
+	if cfg.SSE == "" {
+		return
+	}
+	in.ServerSideEncryption = s3types.ServerSideEncryption(cfg.SSE)
+	if cfg.SSE == "aws:kms" && cfg.SSEKMSKeyID != "" {
+		in.SSEKMSKeyId = aws.String(cfg.SSEKMSKeyID)
+	}
 }
 
 func (s *S3) Exists(ctx context.Context, key string) (bool, error) {

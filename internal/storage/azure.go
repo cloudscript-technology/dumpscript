@@ -75,6 +75,7 @@ func (a *Azure) Upload(ctx context.Context, localPath, key string) error {
 	if _, err = a.client.UploadFile(ctx, a.cfg.Azure.Container, key, f, &azblob.UploadFileOptions{
 		BlockSize:   chunk,
 		Concurrency: uint16(a.cfg.Upload.Concurrency),
+		Metadata:    metadataPtrMap(backupTags(a.cfg)),
 	}); err != nil {
 		return fmt.Errorf("azure upload: %w", err)
 	}
