@@ -64,3 +64,41 @@ func TestServeMetrics_ServesMetricsEndpoint(t *testing.T) {
 		t.Errorf("expected counter in /metrics body, got:\n%s", body)
 	}
 }
+
+// TestServeMetrics_HealthEndpoints verifies /healthz and /readyz are served on
+// the same listener. Both should return 200 with a small text body.
+func TestServeMetrics_HealthEndpoints(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+
+	reg := prometheus.NewRegistry()
+	ServeMetrics(addr, reg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	// Poll until listener is up.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := http.Get("http://" + addr + "/healthz"); err == nil { //nolint:noctx
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	for _, path := range []string{"/healthz", "/readyz"} {
+		resp, err := http.Get("http://" + addr + path) //nolint:noctx
+		if err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("%s status = %d, want 200; body=%s", path, resp.StatusCode, body)
+		}
+		if len(body) == 0 {
+			t.Errorf("%s returned empty body", path)
+		}
+	}
+}
