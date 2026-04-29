@@ -349,12 +349,16 @@ func (c *Config) ValidateRestore() error {
 	return c.validateConnection()
 }
 
-// validateConnection enforces the per-engine connection requirements.
+// ValidateConnection enforces the per-engine connection requirements. Public
+// so the `dumpscript validate` subcommand can call it without re-implementing
+// the rules. Used internally by ValidateDump/ValidateRestore as well.
 //
 //   - SQLite is file-based: DB_NAME holds the path, no host/user.
 //   - Redis / etcd / Elasticsearch accept anonymous access — DB_USER is
 //     optional; DB_HOST is still required.
 //   - Every other engine requires both DB_HOST and DB_USER.
+func (c *Config) ValidateConnection() error { return c.validateConnection() }
+
 func (c *Config) validateConnection() error {
 	if c.DB.Type == DBSQLite {
 		if c.DB.Name == "" {

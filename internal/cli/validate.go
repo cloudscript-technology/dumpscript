@@ -41,7 +41,18 @@ func newValidateCmd(log *slog.Logger) *cobra.Command {
 			}
 			fmt.Println("✔ ValidateCommon passed (DB type, storage backend, required keys)")
 
-			// Phase 2: storage reachability — uses the same path as the dump
+			// Phase 2: per-engine connection requirements (DB_HOST, DB_USER,
+			// engine-specific exceptions for sqlite/redis/etcd/elasticsearch).
+			// Without this the validate subcommand would silently green-light
+			// configs missing fields the dump pipeline would reject at run
+			// time.
+			if err := cfg.ValidateConnection(); err != nil {
+				fmt.Fprintln(os.Stderr, "✗ ValidateConnection failed:", err)
+				return err
+			}
+			fmt.Println("✔ ValidateConnection passed (per-engine host/user requirements)")
+
+			// Phase 3: storage reachability — uses the same path as the dump
 			// pipeline's preflight.
 			ctx := cmd.Context()
 			if err := probeStorage(ctx, cfg, log); err != nil {

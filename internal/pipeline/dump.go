@@ -274,7 +274,7 @@ func (p *Dump) uploadArtifact(ctx context.Context, log *slog.Logger, art *dumper
 func (p *Dump) uploadManifest(ctx context.Context, log *slog.Logger, art *dumper.Artifact, dumpKey string, started time.Time, execID string) error {
 	completed := time.Now()
 	encryption := ""
-	if p.d.Config.EncryptionKeyFile != "" {
+	if p.d.Config.EncryptionKey != "" || p.d.Config.EncryptionKeyFile != "" {
 		encryption = "aes-256-gcm"
 	}
 	m := &manifest.Manifest{
