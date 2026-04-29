@@ -19,7 +19,7 @@ spec:
           # PG17+ required: dumpscript image uses pg_dump 18 which emits
           # "SET transaction_timeout" (added in PG17). On PG16 this aborts
           # the restore transaction silently.
-          image: postgres:17
+          image: mirror.gcr.io/library/postgres:17
           env:
             - name: POSTGRES_USER
               value: testuser

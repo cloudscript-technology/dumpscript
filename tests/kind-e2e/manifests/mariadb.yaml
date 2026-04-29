@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: mariadb
-          image: mariadb:11
+          image: mirror.gcr.io/library/mariadb:11
           env:
             - name: MARIADB_ROOT_PASSWORD
               value: testpassword

@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: fake-gcs
-          image: fsouza/fake-gcs-server:1.49.0
+          image: mirror.gcr.io/fsouza/fake-gcs-server:1.49.0
           # public-host must match the in-cluster Service DNS so that signed URLs
           # and download redirects resolve correctly from the dumpscript pod.
           args:

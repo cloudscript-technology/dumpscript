@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: localstack
-          image: localstack/localstack:4
+          image: mirror.gcr.io/localstack/localstack:4
           env:
             - name: SERVICES
               value: s3,iam,sts

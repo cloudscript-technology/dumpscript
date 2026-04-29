@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: mongodb
-          image: mongo:7
+          image: mirror.gcr.io/library/mongo:7
           env:
             - name: MONGO_INITDB_ROOT_USERNAME
               value: testuser

@@ -18,7 +18,7 @@ ARG ALPINE_TAG=edge
 ARG PG_CLIENT=postgresql18-client
 
 # --- Build stage ---
-FROM golang:1.25-alpine AS builder
+FROM mirror.gcr.io/library/golang:1.25-alpine AS builder
 WORKDIR /src
 
 COPY go.mod go.sum* ./
@@ -30,7 +30,7 @@ ENV CGO_ENABLED=0 GOOS=linux
 RUN go build -trimpath -ldflags="-s -w" -o /out/dumpscript ./cmd/dumpscript
 
 # --- Runtime stage ---
-FROM alpine:${ALPINE_TAG}
+FROM mirror.gcr.io/library/alpine:${ALPINE_TAG}
 
 # Re-declare ARG inside stage so RUN can see it.
 ARG PG_CLIENT
