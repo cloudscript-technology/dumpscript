@@ -37,6 +37,7 @@ func NewRoot() *cobra.Command {
 		newDumpCmd(bootstrap),
 		newRestoreCmd(bootstrap),
 		newCleanupCmd(bootstrap),
+		newValidateCmd(bootstrap),
 	)
 	return root
 }
