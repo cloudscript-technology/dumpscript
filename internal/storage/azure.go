@@ -2,11 +2,13 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
 	"os"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/bloberror"
 
@@ -132,14 +134,24 @@ func (a *Azure) List(ctx context.Context, prefix string) ([]Object, error) {
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
 		if err != nil {
-			// Azurite (latest) returns 404 ContainerNotFound when listing an
-			// EMPTY container even after the container was created via a
-			// signed PUT. Real Azure correctly returns 200 + empty
-			// EnumerationResults. Treat 404 as "no blobs" so the dump
-			// pipeline's reachability preflight (which invokes List) doesn't
-			// abort spuriously. If the container is genuinely missing, the
-			// later UploadFile call will surface the error clearly.
+			// Azurite (latest) returns 404 when listing an EMPTY container
+			// even after the container was created via a signed PUT — the
+			// emulator's container-state seems to be inconsistent across the
+			// internal route used by Azure SDK paginated listing. Real Azure
+			// correctly returns 200 + empty EnumerationResults.
+			//
+			// Two observed shapes:
+			//   - bloberror.ContainerNotFound (named code in body)
+			//   - generic 404 with no specific code (just StatusCode=404)
+			// Treat both as "empty list" so the dump pipeline's reachability
+			// preflight (which invokes List) doesn't abort spuriously. If
+			// the container is genuinely missing, the later UploadFile call
+			// surfaces the error clearly with upload-time context.
 			if bloberror.HasCode(err, bloberror.ContainerNotFound) {
+				return out, nil
+			}
+			var respErr *azcore.ResponseError
+			if errors.As(err, &respErr) && respErr.StatusCode == 404 {
 				return out, nil
 			}
 			return nil, err
