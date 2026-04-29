@@ -326,82 +326,23 @@ func runAzureCLI(args ...string) (string, error) {
 	return string(out), nil
 }
 
-// createAzureContainer creates a blob container in Azurite by running az CLI
-// from a Pod inside the kind cluster. This is essential for Azurite-in-kind:
-// the emulator's container state is inconsistent across Host headers — a
-// container created via the host's port-forward (Host: localhost:14000) is
-// not visible to subsequent ops from the dumpscript Pod (Host:
-// azurite.svc.cluster.local:10000). Creating the container *from inside the
-// cluster* uses the same Host header the dumpscript Pod will use, so all
-// later list/exists/upload ops find the container.
-//
-// The pod uses the same well-known Azurite shared key as the test host.
+// createAzureContainer creates a blob container in Azurite via the az CLI on
+// the test host (port-forwarded). az handles the SharedKey signature.
 func createAzureContainer(name string) {
 	GinkgoHelper()
-	const podName = "azure-container-init"
-	connStr := fmt.Sprintf(
-		"DefaultEndpointsProtocol=http;AccountName=%s;AccountKey=%s;BlobEndpoint=http://azurite.%s.svc.cluster.local:10000/%s;",
-		azureAccount, azuriteKey, testNamespace, azureAccount)
-
-	// Idempotent: delete any leftover pod from a previous run before recreating.
-	runOutput("kubectl", "delete", "pod", podName, //nolint:errcheck
-		"-n", testNamespace, "--ignore-not-found")
-
-	// Use az CLI image with attach=true so we get the output back.
-	cmd := exec.Command("kubectl", "run", podName,
-		"-n", testNamespace,
-		"--image=mcr.microsoft.com/azure-cli:latest",
-		"--restart=Never",
-		"--rm", "-i",
-		"--quiet",
-		"--env=AZURE_STORAGE_CONNECTION_STRING="+connStr,
-		"--",
-		"az", "storage", "container", "create", "--name", name)
-	cmd.Env = podmanEnv()
-	out, err := cmd.CombinedOutput()
-	s := string(out)
-	if err != nil {
-		// Idempotent: tolerate "container already exists" outcomes.
-		if strings.Contains(s, "ContainerAlreadyExists") ||
-			strings.Contains(s, "ResourceAlreadyExists") {
-			return
-		}
-		Fail(fmt.Sprintf("create Azure container %q from in-cluster pod:\n%s\nerr=%v", name, s, err))
-	}
+	out, err := runAzureCLI("storage", "container", "create", "--name", name)
+	Expect(err).NotTo(HaveOccurred(), "create Azure container %q:\n%s", name, out)
 }
 
-// listAzureBlobs returns the names of all blobs in the container by running
-// az CLI from a Pod inside the kind cluster — same reason as
-// createAzureContainer (Azurite's container-state is discriminated by Host
-// header, so a list from the test host's port-forward sees a different
-// container than the one the dumpscript Pod actually uploaded into).
+// listAzureBlobs returns the names of all blobs in the container via az CLI
+// on the test host (port-forwarded to Azurite).
 func listAzureBlobs(container string) ([]string, error) {
-	const podName = "azure-blob-list"
-	connStr := fmt.Sprintf(
-		"DefaultEndpointsProtocol=http;AccountName=%s;AccountKey=%s;BlobEndpoint=http://azurite.%s.svc.cluster.local:10000/%s;",
-		azureAccount, azuriteKey, testNamespace, azureAccount)
-
-	// Idempotent: delete any leftover pod from a previous list.
-	exec.Command("kubectl", "delete", "pod", podName, //nolint:errcheck
-		"-n", testNamespace, "--ignore-not-found").Run()
-
-	cmd := exec.Command("kubectl", "run", podName,
-		"-n", testNamespace,
-		"--image=mcr.microsoft.com/azure-cli:latest",
-		"--restart=Never",
-		"--rm", "-i",
-		"--quiet",
-		"--env=AZURE_STORAGE_CONNECTION_STRING="+connStr,
-		"--",
-		"az", "storage", "blob", "list",
+	out, err := runAzureCLI("storage", "blob", "list",
 		"--container-name", container,
 		"--query", "[].name",
 		"--output", "tsv")
-	cmd.Env = podmanEnv()
-	rawOut, err := cmd.CombinedOutput()
-	out := string(rawOut)
 	if err != nil {
-		return nil, fmt.Errorf("list Azure blobs from in-cluster pod: %w\n%s", err, out)
+		return nil, err
 	}
 	out = strings.TrimSpace(out)
 	if out == "" {
