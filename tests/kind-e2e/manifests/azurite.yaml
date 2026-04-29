@@ -16,9 +16,15 @@ spec:
     spec:
       containers:
         - name: azurite
-          image: mcr.microsoft.com/azure-storage/azurite:latest
-          # Same flags as the testcontainers e2e: --loose tolerates emulator quirks,
-          # --skipApiVersionCheck accepts SDKs sending newer x-ms-version values.
+          # Pinned to 3.34.0 — :latest had inconsistent container-state
+          # behavior in kind: PUT ?restype=container returned 201 from the
+          # test (via port-forward, Host=localhost:14000), but subsequent
+          # ops from the dumpscript pod (Host=azurite.svc.cluster.local)
+          # got 404 ContainerNotFound on the same container. Pinning the
+          # version stabilises the behavior.
+          image: mcr.microsoft.com/azure-storage/azurite:3.34.0
+          # --loose tolerates emulator quirks; --skipApiVersionCheck accepts
+          # SDKs sending newer x-ms-version values.
           args:
             - "azurite-blob"
             - "--blobHost"
