@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths-ignore:
+      - "examples/**"
+      - "docs/**"
+      - "**.md"
+      - "LICENSE"
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.25"
+
+jobs:
+  # ── Binary: lint + vet + unit tests ──────────────────────────────────────
+  binary:
+    name: binary (lint, vet, unit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test (unit)
+        run: go test -race -count=1 ./...
+
+      - name: go test (kind-e2e build-only)
+        # The kind-e2e suite needs a real cluster; in CI we just compile-check
+        # to catch breakage in the test sources.
+        run: |
+          cd tests/kind-e2e
+          go test -tags kind_e2e -run none -count 0 ./...
+
+  # ── Operator: envtest unit tests + controller-gen verification ──────────
+  operator:
+    name: operator (envtest + manifests)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: operator
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: operator/go.sum
+
+      - name: make generate (deepcopy)
+        run: make generate
+
+      - name: make manifests (CRDs + RBAC)
+        run: make manifests
+
+      - name: verify generated files are committed
+        # If make generate / manifests produces a diff the contributor forgot
+        # to commit the regenerated output. CI fails loudly so reviewers don't
+        # have to hunt for stale CRDs.
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "Uncommitted changes after make generate / manifests:"
+            git status --porcelain
+            git diff
+            exit 1
+          fi
+
+      - name: make test (envtest unit)
+        run: make test
+
+  # ── Lint via golangci-lint (PR-only — too noisy as gating on push) ─────
+  lint:
+    name: lint (golangci-lint)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.62
+          args: --timeout=5m
+          # Exit 0 for now — the project doesn't have a curated .golangci.yml
+          # yet and we'd rather surface findings than gate merges. Flip to
+          # `--out-format=colored-line-number` once the rule set stabilizes.
+          only-new-issues: true
