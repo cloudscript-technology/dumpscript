@@ -5,6 +5,7 @@ metadata:
   labels:
     app: mariadb
 spec:
+  progressDeadlineSeconds: 1800
   replicas: 1
   selector:
     matchLabels:

@@ -58,11 +58,12 @@ var _ = BeforeSuite(func() {
 	}
 
 	// Wait for all DB rollouts together so they roll out in parallel.
-	// 10min covers cold-cache image pulls — mongo:7 alone is ~700MB and all
+	// 30min covers cold-cache image pulls — mongo:7 alone is ~700MB and all
 	// six DB images pulling concurrently can saturate slower connections.
-	// Falls through immediately when images are already cached on the node.
+	// Matches the manifests' progressDeadlineSeconds=1800; falls through
+	// immediately when images are already cached on the node.
 	for _, dep := range []string{"postgres", "mysql", "mariadb", "mongodb", "redis", "etcd"} {
-		run("kubectl", "rollout", "status", "deployment/"+dep, "-n", testNamespace, "--timeout=600s")
+		run("kubectl", "rollout", "status", "deployment/"+dep, "-n", testNamespace, "--timeout=1800s")
 	}
 
 	By("deploying fake-gcs-server (GCS emulator)")
@@ -138,7 +139,7 @@ var _ = BeforeSuite(func() {
 			GinkgoWriter.Printf("operator pod phase=%q events:\n%s\n", phase, events)
 		}
 		g.Expect(phase).To(Equal("Running"))
-	}, 3*time.Minute, 5*time.Second).Should(Succeed())
+	}, 10*time.Minute, 5*time.Second).Should(Succeed())
 
 	By("creating AWS credentials secret (used by static-credential test specs)")
 	run("kubectl", "create", "secret", "generic", "aws-credentials",
@@ -355,9 +356,14 @@ func rewriteManagerImage(yaml, newImage string) string {
 // (`controller:latest`) and the published-name variant left by
 // `make docker-build IMG=example.com/...` in the operator's own e2e suite.
 func isControllerImage(val string) bool {
+	// Cover kubebuilder's default placeholder, plus any operator image that
+	// `make bundle` / `make docker-build IMG=...` may have left in the
+	// kustomize overlay (so we always rewrite to the locally-loaded image
+	// regardless of upstream/CI mutations).
 	return val == "controller:latest" ||
 		strings.HasPrefix(val, "controller:") ||
-		strings.HasPrefix(val, "example.com/dumpscript-operator:")
+		strings.HasPrefix(val, "example.com/dumpscript-operator:") ||
+		strings.Contains(val, "/dumpscript-operator:")
 }
 
 // kindLoadImage saves the image with podman and pipes it directly into

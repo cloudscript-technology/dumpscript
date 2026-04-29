@@ -5,6 +5,10 @@ metadata:
   labels:
     app: mongodb
 spec:
+  # mongo:7 is ~700MB; on cold caches the image pull alone can exceed
+  # the default 600s progressDeadline. Bump to 30min so kubectl rollout
+  # status (with a matching --timeout) has a real chance to succeed.
+  progressDeadlineSeconds: 1800
   replicas: 1
   selector:
     matchLabels:
