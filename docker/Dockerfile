@@ -49,7 +49,20 @@ RUN apk add --no-cache \
 
 COPY --from=builder /out/dumpscript /usr/local/bin/dumpscript
 
+# Default workdir matches the binary's WORK_DIR default.
 WORKDIR /dumpscript
+
+# OCI metadata — discoverable by ops tooling (skopeo inspect, image scanners).
+LABEL org.opencontainers.image.title="dumpscript" \
+      org.opencontainers.image.description="Database dump and restore tool for S3, GCS, and Azure Blob" \
+      org.opencontainers.image.source="https://github.com/cloudscript-technology/dumpscript" \
+      org.opencontainers.image.licenses="Apache-2.0"
+
+# Optional liveness check for daemon-mode deployments. Only applies when
+# METRICS_LISTEN is set; otherwise (CronJob mode) the binary exits before
+# any probe runs and Kubernetes ignores the directive.
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+  CMD wget -q --spider http://localhost:9090/healthz 2>/dev/null || exit 1
 
 ENTRYPOINT ["/usr/local/bin/dumpscript"]
 CMD ["dump"]
