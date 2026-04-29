@@ -63,7 +63,15 @@ func (p *Restore) Run(ctx context.Context) error {
 	if p.d.Config.DB.Type == config.DBMongo {
 		ext = "archive"
 	}
-	local := filepath.Join(p.d.Config.WorkDir, "dump_restore."+ext+".gz")
+	// Pick the local compression suffix to mirror the source key, so the
+	// restorer's auto-detect (gzip vs zstd from extension) reads the right
+	// decoder. Default to .gz for legacy artifacts where the key omits a
+	// codec suffix.
+	codecSuffix := ".gz"
+	if strings.HasSuffix(key, ".zst") || strings.HasSuffix(key, ".zst.aes") {
+		codecSuffix = ".zst"
+	}
+	local := filepath.Join(p.d.Config.WorkDir, "dump_restore."+ext+codecSuffix)
 	defer func() { _ = os.Remove(local) }()
 
 	// Encrypted artifacts have a `.aes` suffix. Adjust the local download
