@@ -201,6 +201,25 @@ type Config struct {
 	// Useful for daemon-mode deployments; CronJobs can leave it empty and
 	// rely on the operator's own metrics endpoint.
 	MetricsListen string `envconfig:"METRICS_LISTEN" default:""`
+
+	// PostDumpHook — when set, the binary executes this command after a
+	// successful dump+upload+manifest, with the run's metadata exposed as
+	// environment variables (DUMPSCRIPT_KEY, DUMPSCRIPT_SIZE, etc).
+	// Use cases: update an external catalog, trigger downstream rotation,
+	// page on success, etc. The hook runs with a 1-minute timeout and its
+	// failure is logged as Warn but does NOT fail the pipeline (the dump
+	// itself is the authoritative artifact).
+	PostDumpHook        string        `envconfig:"POST_DUMP_HOOK"`
+	PostDumpHookTimeout time.Duration `envconfig:"POST_DUMP_HOOK_TIMEOUT" default:"60s"`
+
+	// EncryptionKeyFile — path to a 32-byte AES key (hex-encoded, 64 ASCII
+	// chars). When set, the dumper encrypts the compressed artifact with
+	// AES-256-GCM in-place before upload. Resulting object suffix becomes
+	// `.aes`. Restore reverses the process by decrypting before piping
+	// into the engine's restorer. Storage-side encryption (SSE-KMS) defends
+	// against provider-account leaks; client-side encryption defends
+	// additionally against the storage admin reading the bytes.
+	EncryptionKeyFile string `envconfig:"ENCRYPTION_KEY_FILE"`
 }
 
 // Load reads the configuration from environment variables.

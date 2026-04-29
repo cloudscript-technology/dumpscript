@@ -138,10 +138,22 @@ func (p *Dump) Run(ctx context.Context) (retErr error) {
 	}
 	defer func() { _ = art.Cleanup() }()
 
-	displayPath, err := p.uploadArtifact(ctx, log, art, now, started, execID)
+	// Optional client-side encryption (AES-256-GCM). When configured, swaps
+	// the artifact for the encrypted ciphertext before upload — the
+	// uploaded key automatically gains a `.aes` suffix because it's derived
+	// from filepath.Base(art.Path).
+	if err := p.encryptIfConfigured(log, art); err != nil {
+		return err
+	}
+
+	displayPath, dumpKey, err := p.uploadArtifact(ctx, log, art, now, started, execID)
 	if err != nil {
 		return err
 	}
+
+	// Optional post-dump hook (e.g. external catalog update). Best-effort:
+	// failure is logged but does not fail the pipeline.
+	p.runPostDumpHook(ctx, log, art, dumpKey, displayPath, execID, started)
 
 	p.d.Metrics.RecordRun(metrics.ResultSuccess)
 	p.d.Metrics.RecordLastSuccess()
@@ -230,17 +242,18 @@ func (p *Dump) dumpAndVerify(ctx context.Context, log *slog.Logger) (*dumper.Art
 	return art, nil
 }
 
-// uploadArtifact pushes the dump to storage and returns its display path.
-// Also writes a sidecar manifest.json describing the run; manifest upload
-// failure is logged but does not fail the pipeline (the dump itself is the
-// authoritative artifact and is already safely uploaded).
-func (p *Dump) uploadArtifact(ctx context.Context, log *slog.Logger, art *dumper.Artifact, now, started time.Time, execID string) (string, error) {
+// uploadArtifact pushes the dump to storage and returns its display path
+// and the storage key. Also writes a sidecar manifest.json describing the
+// run; manifest upload failure is logged but does not fail the pipeline
+// (the dump itself is the authoritative artifact and is already safely
+// uploaded).
+func (p *Dump) uploadArtifact(ctx context.Context, log *slog.Logger, art *dumper.Artifact, now, started time.Time, execID string) (string, string, error) {
 	filename := filepath.Base(art.Path)
 	key := storage.BuildKey(p.d.Config, now, filename)
 	log.Info("├─ [4/4] upload to storage", "key", key, "size", art.Size)
 	uploadStart := time.Now()
 	if err := p.d.Storage.Upload(ctx, art.Path, key); err != nil {
-		return "", fmt.Errorf("%w: %w", ErrUploadFailed, err)
+		return "", "", fmt.Errorf("%w: %w", ErrUploadFailed, err)
 	}
 	p.d.Metrics.RecordUpload(string(p.d.Config.Backend), time.Since(uploadStart), art.Size)
 	displayPath := p.d.Storage.DisplayPath(key)
@@ -254,12 +267,16 @@ func (p *Dump) uploadArtifact(ctx context.Context, log *slog.Logger, art *dumper
 			"key", manifest.SidecarKey(key), "err", err)
 	}
 
-	return displayPath, nil
+	return displayPath, key, nil
 }
 
 // uploadManifest builds the run's manifest.json and uploads it as a sidecar.
 func (p *Dump) uploadManifest(ctx context.Context, log *slog.Logger, art *dumper.Artifact, dumpKey string, started time.Time, execID string) error {
 	completed := time.Now()
+	encryption := ""
+	if p.d.Config.EncryptionKeyFile != "" {
+		encryption = "aes-256-gcm"
+	}
 	m := &manifest.Manifest{
 		ExecutionID:     execID,
 		Engine:          string(p.d.Config.DB.Type),
@@ -270,6 +287,7 @@ func (p *Dump) uploadManifest(ctx context.Context, log *slog.Logger, art *dumper
 		SizeBytes:       art.Size,
 		Checksum:        art.Checksum,
 		Compression:     p.d.Config.CompressionType,
+		Encryption:      encryption,
 		DumpOptions:     p.d.Config.DB.DumpOptions,
 		StartedAt:       started,
 		CompletedAt:     completed,
