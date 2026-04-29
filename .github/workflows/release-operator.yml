@@ -1,0 +1,201 @@
+name: Release Operator + Helm + Bundle
+
+# Triggers
+#  - push of a v* tag (the existing build-and-push.yml creates these on main)
+#  - manual via workflow_dispatch (handy for testing without bumping a real tag)
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (without leading v). Example: 0.0.1-rc1'
+        required: true
+        default: '0.0.0-rc1'
+
+env:
+  REGISTRY: ghcr.io
+  # `${{ github.repository }}` is `<owner>/<repo>` (e.g. cloudscript-technology/dumpscript)
+  OPERATOR_IMAGE: ${{ github.repository }}-operator
+  BUNDLE_IMAGE: ${{ github.repository }}-operator-bundle
+  # Charts go under <owner>/charts/<chart-name>
+  CHART_REPO: ${{ github.repository_owner }}/charts
+
+jobs:
+  # ── 1. Compute version once (used as inputs by every push job) ─────────
+  resolve-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}    # e.g. 0.0.1
+      tag:     ${{ steps.v.outputs.tag }}        # e.g. v0.0.1
+    steps:
+      - id: v
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          fi
+          echo "version=$VERSION"   >> $GITHUB_OUTPUT
+          echo "tag=v$VERSION"      >> $GITHUB_OUTPUT
+
+  # ── 2. Operator container image (multi-arch) ───────────────────────────
+  operator-image:
+    needs: resolve-version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.OPERATOR_IMAGE }}
+          tags: |
+            type=raw,value=latest
+            type=raw,value=${{ needs.resolve-version.outputs.version }}
+            type=raw,value=${{ needs.resolve-version.outputs.tag }}
+
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ./operator
+          file: ./operator/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=operator
+          cache-to: type=gha,mode=max,scope=operator
+
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.OPERATOR_IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+  # ── 3. Helm chart pushed as OCI artifact ───────────────────────────────
+  helm-chart:
+    needs: resolve-version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.0
+
+      - name: Login to GHCR for Helm OCI
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | helm registry login ghcr.io --username ${{ github.actor }} --password-stdin
+
+      - name: Pin chart version + appVersion
+        run: |
+          VERSION="${{ needs.resolve-version.outputs.version }}"
+          # Chart.yaml uses `version` (chart) and `appVersion` (operator binary).
+          # We align both to the released tag for predictable installs.
+          sed -i "s/^version:.*/version: ${VERSION}/"      operator/charts/dumpscript-operator/Chart.yaml
+          sed -i "s/^appVersion:.*/appVersion: \"${VERSION}\"/" operator/charts/dumpscript-operator/Chart.yaml
+          # Pin the operator image tag in values.yaml so a `helm install` with
+          # no overrides pulls the matching operator version.
+          sed -i "s|tag: \"\"|tag: \"${VERSION}\"|" operator/charts/dumpscript-operator/values.yaml
+
+      - name: Lint chart
+        run: helm lint operator/charts/dumpscript-operator
+
+      - name: Package chart
+        run: |
+          helm package operator/charts/dumpscript-operator -d /tmp/charts
+
+      - name: Push chart to OCI
+        run: |
+          VERSION="${{ needs.resolve-version.outputs.version }}"
+          helm push /tmp/charts/dumpscript-operator-${VERSION}.tgz oci://${{ env.REGISTRY }}/${{ env.CHART_REPO }}
+
+  # ── 4. OLM bundle image ────────────────────────────────────────────────
+  olm-bundle:
+    needs: [resolve-version, operator-image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache-dependency-path: operator/go.sum
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate bundle manifests
+        # `make bundle` runs operator-sdk + kustomize to render the CSV +
+        # CRDs + RBAC into operator/bundle/. The Makefile target also
+        # validates the bundle (`operator-sdk bundle validate`).
+        working-directory: operator
+        env:
+          IMG: ${{ env.REGISTRY }}/${{ env.OPERATOR_IMAGE }}:${{ needs.resolve-version.outputs.tag }}
+          VERSION: ${{ needs.resolve-version.outputs.version }}
+        run: make bundle
+
+      - name: Build + push bundle image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./operator
+          file: ./operator/bundle.Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.BUNDLE_IMAGE }}:${{ needs.resolve-version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.BUNDLE_IMAGE }}:${{ needs.resolve-version.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ env.BUNDLE_IMAGE }}:latest
+          cache-from: type=gha,scope=bundle
+          cache-to: type=gha,mode=max,scope=bundle
+
+  # ── 5. Summary in the run page so consumers know what was published ───
+  summary:
+    needs: [resolve-version, operator-image, helm-chart, olm-bundle]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - run: |
+          {
+            echo "# Released ${{ needs.resolve-version.outputs.tag }}"
+            echo
+            echo "## Pull"
+            echo '```bash'
+            echo "# Operator image"
+            echo "docker pull ${{ env.REGISTRY }}/${{ env.OPERATOR_IMAGE }}:${{ needs.resolve-version.outputs.version }}"
+            echo
+            echo "# Helm chart (OCI)"
+            echo "helm install dumpscript-operator oci://${{ env.REGISTRY }}/${{ env.CHART_REPO }}/dumpscript-operator \\"
+            echo "  --version ${{ needs.resolve-version.outputs.version }} \\"
+            echo "  -n dumpscript-system --create-namespace"
+            echo
+            echo "# OLM bundle (cluster with OLM installed)"
+            echo "operator-sdk run bundle ${{ env.REGISTRY }}/${{ env.BUNDLE_IMAGE }}:${{ needs.resolve-version.outputs.version }} \\"
+            echo "  --install-mode AllNamespaces"
+            echo '```'
+          } >> $GITHUB_STEP_SUMMARY

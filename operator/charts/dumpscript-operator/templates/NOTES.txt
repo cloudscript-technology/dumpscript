@@ -1,0 +1,47 @@
+dumpscript-operator {{ .Chart.AppVersion }} installed in namespace {{ .Release.Namespace }}.
+
+Verify the operator pod is running:
+
+  kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/name={{ include "dumpscript-operator.name" . }}
+
+Apply your first BackupSchedule. Minimal example (PostgreSQL → S3):
+
+  cat <<'EOF' | kubectl apply -f -
+  apiVersion: dumpscript.cloudscript.com.br/v1alpha1
+  kind: BackupSchedule
+  metadata:
+    name: postgres-daily
+    namespace: {{ .Release.Namespace }}
+  spec:
+    schedule: "0 3 * * *"
+    periodicity: daily
+    image: ghcr.io/cloudscript-technology/dumpscript:latest
+    database:
+      type: postgresql
+      host: postgres.default.svc.cluster.local
+      name: appdb
+      credentialsSecretRef: { name: postgres-credentials }
+    storage:
+      backend: s3
+      s3:
+        bucket: my-backups
+        region: us-east-1
+        credentialsSecretRef: { name: aws-credentials }
+  EOF
+
+Check status:
+
+  kubectl get backupschedule postgres-daily -n {{ .Release.Namespace }} -o wide
+  kubectl describe backupschedule postgres-daily -n {{ .Release.Namespace }}
+
+{{- if .Values.metrics.enabled }}
+
+Prometheus metrics are exposed on the metrics Service (port {{ .Values.metrics.service.port }}, HTTPS, auth-protected).
+{{- if .Values.serviceMonitor.enabled }}
+A ServiceMonitor was created — kube-prometheus-stack will pick it up automatically.
+{{- else }}
+Enable a ServiceMonitor by setting `serviceMonitor.enabled=true` in values (requires prometheus-operator CRDs).
+{{- end }}
+{{- end }}
+
+Documentation: https://github.com/cloudscript-technology/dumpscript

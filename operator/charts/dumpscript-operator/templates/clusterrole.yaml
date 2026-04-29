@@ -1,0 +1,74 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "dumpscript-operator.fullname" . }}-manager
+  labels:
+    {{- include "dumpscript-operator.labels" . | nindent 4 }}
+rules:
+  # Operator emits Kubernetes Events on every reconcile transition (so
+  # `kubectl describe backupschedule` surfaces failure reasons).
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  # Owns CronJobs (created from BackupSchedules) and Jobs (created from
+  # Restores). full CRUD because we mutate spec on every reconcile.
+  - apiGroups: ["batch"]
+    resources: ["cronjobs", "jobs"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+  - apiGroups: ["dumpscript.cloudscript.com.br"]
+    resources: ["backupschedules", "restores"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+  - apiGroups: ["dumpscript.cloudscript.com.br"]
+    resources: ["backupschedules/finalizers", "restores/finalizers"]
+    verbs: ["update"]
+  - apiGroups: ["dumpscript.cloudscript.com.br"]
+    resources: ["backupschedules/status", "restores/status"]
+    verbs: ["get", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "dumpscript-operator.fullname" . }}-manager
+  labels:
+    {{- include "dumpscript-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "dumpscript-operator.fullname" . }}-manager
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "dumpscript-operator.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- if .Values.metrics.enabled }}
+---
+# Allow the operator's auth proxy to verify metrics-scraping callers via
+# the K8s TokenReview / SubjectAccessReview APIs.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "dumpscript-operator.fullname" . }}-metrics-auth
+  labels:
+    {{- include "dumpscript-operator.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+  - apiGroups: ["authorization.k8s.io"]
+    resources: ["subjectaccessreviews"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "dumpscript-operator.fullname" . }}-metrics-auth
+  labels:
+    {{- include "dumpscript-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "dumpscript-operator.fullname" . }}-metrics-auth
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "dumpscript-operator.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
