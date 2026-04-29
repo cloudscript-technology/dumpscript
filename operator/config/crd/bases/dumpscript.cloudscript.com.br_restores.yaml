@@ -1029,6 +1029,33 @@ spec:
                   Database — same shape as BackupSchedule.spec.database. Drives where
                   the dump is applied.
                 properties:
+                  clickhouse:
+                    description: ClickHouse — ClickHouse-specific options. Only consulted
+                      when type=clickhouse.
+                    properties:
+                      cluster:
+                        description: Cluster — ON CLUSTER target. Translates to `--cluster=<name>`.
+                        type: string
+                      secure:
+                        description: Secure — when true, passes `--secure` to clickhouse-client
+                          (TLS).
+                        type: boolean
+                    type: object
+                  cockroach:
+                    description: Cockroach — CockroachDB-specific options. Only consulted
+                      when type=cockroach.
+                    properties:
+                      sslMode:
+                        description: |-
+                          SSLMode — `disable`, `require`, `verify-ca`, `verify-full`. Maps to
+                          `sslmode=<value>` in the connection string the dumper builds for psql.
+                        enum:
+                        - disable
+                        - require
+                        - verify-ca
+                        - verify-full
+                        type: string
+                    type: object
                   credentialsSecretRef:
                     description: |-
                       CredentialsSecretRef — Secret with username/password keys. Optional for
@@ -1046,6 +1073,30 @@ spec:
                         type: string
                     required:
                     - name
+                    type: object
+                  elasticsearch:
+                    description: Elasticsearch — Elasticsearch-specific options. Only
+                      consulted when type=elasticsearch.
+                    properties:
+                      indexPattern:
+                        description: |-
+                          IndexPattern — value for `--index-pattern`. When empty, the dumper
+                          dumps the index named by `database.name`.
+                        type: string
+                    type: object
+                  etcd:
+                    description: Etcd — etcd-specific options. Only consulted when
+                      type=etcd.
+                    properties:
+                      scheme:
+                        description: |-
+                          Scheme — `http` (default) or `https`. The dumper consumes
+                          `--scheme=https` from DUMP_OPTIONS to pick the URL scheme without
+                          passing it to etcdctl. This field is the type-safe equivalent.
+                        enum:
+                        - http
+                        - https
+                        type: string
                     type: object
                   host:
                     description: Host (or path, for sqlite). Optional for sqlite (Name
@@ -1086,6 +1137,19 @@ spec:
                     description: Name — DB name / index / `db.table` form (clickhouse)
                       / file path (sqlite).
                     type: string
+                  neo4j:
+                    description: Neo4j — Neo4j-specific options. Only consulted when
+                      type=neo4j.
+                    properties:
+                      authMode:
+                        description: |-
+                          AuthMode — `bolt` (default) or `none`. Affects how neo4j-admin
+                          authenticates to the running server.
+                        enum:
+                        - bolt
+                        - none
+                        type: string
+                    type: object
                   options:
                     description: |-
                       Options — raw extra flags forwarded to the engine CLI. Use only for
@@ -1108,6 +1172,17 @@ spec:
                     - key
                     - name
                     type: object
+                  oracle:
+                    description: Oracle — Oracle-specific options. Only consulted
+                      when type=oracle.
+                    properties:
+                      serviceName:
+                        description: |-
+                          ServiceName — Oracle service name. When set, the dumper builds the
+                          connection string using a service descriptor instead of the SID
+                          (which is what `database.name` is interpreted as by default).
+                        type: string
+                    type: object
                   port:
                     description: |-
                       Port — overrides the engine default. Engine defaults are applied by the
@@ -1127,6 +1202,41 @@ spec:
                           today; the binary surfaces it as POSTGRES_VERSION env so future engine
                           logic / observability can pivot on it. Defaults to "16" on the binary.
                         type: string
+                    type: object
+                  redis:
+                    description: Redis — Redis-specific options. Only consulted when
+                      type=redis.
+                    properties:
+                      db:
+                        description: |-
+                          DB — numeric Redis logical database (0-15 by default). Translated to
+                          `-n <value>` on the redis-cli argv.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      tls:
+                        description: |-
+                          TLS — when true, the dumper passes `--tls` to redis-cli. The operator
+                          does not yet wire CA/cert/key Secret refs; users that need them can
+                          pass extra flags via `database.options`.
+                        type: boolean
+                    type: object
+                  sqlserver:
+                    description: SQLServer — SQL Server-specific options. Only consulted
+                      when type=sqlserver.
+                    properties:
+                      applicationIntent:
+                        description: ApplicationIntent — `ReadOnly` to read from a
+                          secondary replica.
+                        enum:
+                        - ReadOnly
+                        - ReadWrite
+                        type: string
+                      trustServerCertificate:
+                        description: |-
+                          TrustServerCertificate — passes `-W` (trust-server-cert) to
+                          mssql-scripter. Useful for self-signed certs in dev/test.
+                        type: boolean
                     type: object
                   type:
                     description: Type — one of the 13 supported engines.

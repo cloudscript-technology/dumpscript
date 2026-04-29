@@ -230,6 +230,30 @@ type DatabaseSpec struct {
 	// MariaDB — MariaDB-specific options. Only consulted when type=mariadb.
 	MariaDB *MariaDBSpec `json:"mariadb,omitempty"`
 
+	// Redis — Redis-specific options. Only consulted when type=redis.
+	Redis *RedisSpec `json:"redis,omitempty"`
+
+	// Etcd — etcd-specific options. Only consulted when type=etcd.
+	Etcd *EtcdSpec `json:"etcd,omitempty"`
+
+	// Elasticsearch — Elasticsearch-specific options. Only consulted when type=elasticsearch.
+	Elasticsearch *ElasticsearchSpec `json:"elasticsearch,omitempty"`
+
+	// SQLServer — SQL Server-specific options. Only consulted when type=sqlserver.
+	SQLServer *SQLServerSpec `json:"sqlserver,omitempty"`
+
+	// Oracle — Oracle-specific options. Only consulted when type=oracle.
+	Oracle *OracleSpec `json:"oracle,omitempty"`
+
+	// ClickHouse — ClickHouse-specific options. Only consulted when type=clickhouse.
+	ClickHouse *ClickHouseSpec `json:"clickhouse,omitempty"`
+
+	// Neo4j — Neo4j-specific options. Only consulted when type=neo4j.
+	Neo4j *Neo4jSpec `json:"neo4j,omitempty"`
+
+	// Cockroach — CockroachDB-specific options. Only consulted when type=cockroach.
+	Cockroach *CockroachSpec `json:"cockroach,omitempty"`
+
 	// Volume — when set, the operator mounts a Volume into the dumpscript pod.
 	// Required for sqlite (and any other file-based engine) so the dumpscript
 	// container can read/write the database file.
@@ -276,6 +300,85 @@ type MySQLSpec struct {
 type MariaDBSpec struct {
 	// Version — server major version (e.g. "11.4"). Maps to MARIADB_VERSION env.
 	Version string `json:"version,omitempty"`
+}
+
+// RedisSpec carries Redis-only options. All fields below are translated by
+// the operator into raw flags appended to DUMP_OPTIONS.
+type RedisSpec struct {
+	// DB — numeric Redis logical database (0-15 by default). Translated to
+	// `-n <value>` on the redis-cli argv.
+	// +kubebuilder:validation:Minimum=0
+	DB int32 `json:"db,omitempty"`
+
+	// TLS — when true, the dumper passes `--tls` to redis-cli. The operator
+	// does not yet wire CA/cert/key Secret refs; users that need them can
+	// pass extra flags via `database.options`.
+	TLS bool `json:"tls,omitempty"`
+}
+
+// EtcdSpec carries etcd-only options.
+type EtcdSpec struct {
+	// Scheme — `http` (default) or `https`. The dumper consumes
+	// `--scheme=https` from DUMP_OPTIONS to pick the URL scheme without
+	// passing it to etcdctl. This field is the type-safe equivalent.
+	// +kubebuilder:validation:Enum=http;https
+	Scheme string `json:"scheme,omitempty"`
+}
+
+// ElasticsearchSpec carries Elasticsearch-only options.
+//
+// Bearer/ApiKey auth tokens go through `database.optionsSecretRef` instead
+// of a typed field — they're naturally raw `--auth-header=…` flags that the
+// existing optionsSecretRef path already handles without exposing the token
+// in plain CR YAML.
+type ElasticsearchSpec struct {
+	// IndexPattern — value for `--index-pattern`. When empty, the dumper
+	// dumps the index named by `database.name`.
+	IndexPattern string `json:"indexPattern,omitempty"`
+}
+
+// SQLServerSpec carries SQL Server-only options.
+type SQLServerSpec struct {
+	// TrustServerCertificate — passes `-W` (trust-server-cert) to
+	// mssql-scripter. Useful for self-signed certs in dev/test.
+	TrustServerCertificate bool `json:"trustServerCertificate,omitempty"`
+
+	// ApplicationIntent — `ReadOnly` to read from a secondary replica.
+	// +kubebuilder:validation:Enum=ReadOnly;ReadWrite
+	ApplicationIntent string `json:"applicationIntent,omitempty"`
+}
+
+// OracleSpec carries Oracle-only options.
+type OracleSpec struct {
+	// ServiceName — Oracle service name. When set, the dumper builds the
+	// connection string using a service descriptor instead of the SID
+	// (which is what `database.name` is interpreted as by default).
+	ServiceName string `json:"serviceName,omitempty"`
+}
+
+// ClickHouseSpec carries ClickHouse-only options.
+type ClickHouseSpec struct {
+	// Cluster — ON CLUSTER target. Translates to `--cluster=<name>`.
+	Cluster string `json:"cluster,omitempty"`
+
+	// Secure — when true, passes `--secure` to clickhouse-client (TLS).
+	Secure bool `json:"secure,omitempty"`
+}
+
+// Neo4jSpec carries Neo4j-only options.
+type Neo4jSpec struct {
+	// AuthMode — `bolt` (default) or `none`. Affects how neo4j-admin
+	// authenticates to the running server.
+	// +kubebuilder:validation:Enum=bolt;none
+	AuthMode string `json:"authMode,omitempty"`
+}
+
+// CockroachSpec carries CockroachDB-only options.
+type CockroachSpec struct {
+	// SSLMode — `disable`, `require`, `verify-ca`, `verify-full`. Maps to
+	// `sslmode=<value>` in the connection string the dumper builds for psql.
+	// +kubebuilder:validation:Enum=disable;require;verify-ca;verify-full
+	SSLMode string `json:"sslMode,omitempty"`
 }
 
 // DatabaseVolume mounts a single Volume into the dumpscript Pod at MountPath.

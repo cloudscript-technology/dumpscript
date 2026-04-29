@@ -647,13 +647,88 @@ func defaultPort(t string) int32 {
 }
 
 // mongoExtras returns engine-specific CLI flags derived from typed sub-fields
-// that get appended to DUMP_OPTIONS. Currently only MongoDB.AuthSource is
-// translated; other engines may grow similar typed fields over time.
+// that get appended to DUMP_OPTIONS. The function name is preserved for
+// historical reasons (this used to handle MongoDB only); it now dispatches
+// across every engine that has a typed sub-block.
 func mongoExtras(db dumpscriptv1alpha1.DatabaseSpec) string {
-	if db.Type != "mongodb" || db.MongoDB == nil || db.MongoDB.AuthSource == "" {
-		return ""
+	switch db.Type {
+	case "mongodb":
+		if db.MongoDB == nil || db.MongoDB.AuthSource == "" {
+			return ""
+		}
+		return "--authenticationDatabase=" + db.MongoDB.AuthSource
+	case "redis":
+		if db.Redis == nil {
+			return ""
+		}
+		var parts []string
+		if db.Redis.DB > 0 {
+			parts = append(parts, "-n", strconv.Itoa(int(db.Redis.DB)))
+		}
+		if db.Redis.TLS {
+			parts = append(parts, "--tls")
+		}
+		return strings.Join(parts, " ")
+	case "etcd":
+		if db.Etcd == nil || db.Etcd.Scheme == "" {
+			return ""
+		}
+		// The dumper consumes --scheme= itself rather than passing it on to
+		// etcdctl, so this is the same shape it expects.
+		return "--scheme=" + db.Etcd.Scheme
+	case "elasticsearch":
+		if db.Elasticsearch == nil {
+			return ""
+		}
+		var parts []string
+		if db.Elasticsearch.IndexPattern != "" {
+			parts = append(parts, "--index-pattern="+db.Elasticsearch.IndexPattern)
+		}
+		// AuthHeaderSecretRef is wired as DUMP_OPTIONS via the secret path
+		// in buildEnv so the token never appears in plain text on the CR.
+		// We just emit the IndexPattern here.
+		return strings.Join(parts, " ")
+	case "sqlserver":
+		if db.SQLServer == nil {
+			return ""
+		}
+		var parts []string
+		if db.SQLServer.TrustServerCertificate {
+			parts = append(parts, "-W")
+		}
+		if db.SQLServer.ApplicationIntent != "" {
+			parts = append(parts, "--application-intent="+db.SQLServer.ApplicationIntent)
+		}
+		return strings.Join(parts, " ")
+	case "oracle":
+		if db.Oracle == nil || db.Oracle.ServiceName == "" {
+			return ""
+		}
+		return "--service-name=" + db.Oracle.ServiceName
+	case "clickhouse":
+		if db.ClickHouse == nil {
+			return ""
+		}
+		var parts []string
+		if db.ClickHouse.Cluster != "" {
+			parts = append(parts, "--cluster="+db.ClickHouse.Cluster)
+		}
+		if db.ClickHouse.Secure {
+			parts = append(parts, "--secure")
+		}
+		return strings.Join(parts, " ")
+	case "neo4j":
+		if db.Neo4j == nil || db.Neo4j.AuthMode == "" {
+			return ""
+		}
+		return "--auth-mode=" + db.Neo4j.AuthMode
+	case "cockroach":
+		if db.Cockroach == nil || db.Cockroach.SSLMode == "" {
+			return ""
+		}
+		return "sslmode=" + db.Cockroach.SSLMode
 	}
-	return "--authenticationDatabase=" + db.MongoDB.AuthSource
+	return ""
 }
 
 // databaseVolume turns DatabaseSpec.Volume into a corev1.Volume +
