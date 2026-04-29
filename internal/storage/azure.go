@@ -110,7 +110,19 @@ func (a *Azure) Exists(ctx context.Context, key string) (bool, error) {
 	if err == nil {
 		return true, nil
 	}
+	// Two observed shapes for "blob doesn't exist":
+	//   - bloberror.BlobNotFound  (named code in body)
+	//   - generic 404 with no specific code (Azurite sometimes returns this
+	//     for HEAD on a non-existent blob — same pattern as the List fix
+	//     in this file)
+	// Translate both into (false, nil) so callers (lock.Acquire, etc.) can
+	// decide based on a clean boolean instead of swallowing retry-eligible
+	// errors all the way up the storage retry decorator.
 	if bloberror.HasCode(err, bloberror.BlobNotFound) {
+		return false, nil
+	}
+	var respErr *azcore.ResponseError
+	if errors.As(err, &respErr) && respErr.StatusCode == 404 {
 		return false, nil
 	}
 	return false, err
