@@ -216,21 +216,44 @@ spec:
 	// Object tagging on S3
 	// -----------------------------------------------------------------
 	Describe("S3 object tagging", func() {
-		It("dump objects carry managed_by + engine + periodicity tags", func() {
-			By("listing existing objects under the canonical postgres prefix")
-			objects, err := listS3Objects(bucketName)
-			Expect(err).NotTo(HaveOccurred())
+		// Order-resilient: accept any postgres backup the suite has produced
+		// so far. Both "main-e2e/" (backup_test.go) and "zstd-e2e/" (this
+		// file's COMPRESSION_TYPE=zstd spec) use postgres as the engine, so
+		// either's tags should match. Eventually wraps the lookup so a slow
+		// preceding spec finishing during this one's BeforeAll doesn't race.
+		postgresPrefixes := []string{"main-e2e/daily/", "zstd-e2e/daily/"}
 
+		It("dump objects carry managed_by + engine + periodicity tags", func() {
 			var key string
+			Eventually(func() string {
+				objects, err := listS3Objects(bucketName)
+				if err != nil {
+					return ""
+				}
+				for _, k := range objects {
+					for _, p := range postgresPrefixes {
+						if strings.HasPrefix(k, p) &&
+							(strings.HasSuffix(k, ".gz") || strings.HasSuffix(k, ".zst")) {
+							return k
+						}
+					}
+				}
+				return ""
+			}, 5*time.Minute, 5*time.Second).ShouldNot(BeEmpty(),
+				"this spec needs at least one postgres backup (main-e2e or zstd-e2e prefix) to inspect tags")
+			objects, _ := listS3Objects(bucketName)
 			for _, k := range objects {
-				if strings.HasPrefix(k, "main-e2e/daily/") &&
-					(strings.HasSuffix(k, ".gz") || strings.HasSuffix(k, ".zst")) {
-					key = k
+				for _, p := range postgresPrefixes {
+					if strings.HasPrefix(k, p) &&
+						(strings.HasSuffix(k, ".gz") || strings.HasSuffix(k, ".zst")) {
+						key = k
+						break
+					}
+				}
+				if key != "" {
 					break
 				}
 			}
-			Expect(key).NotTo(BeEmpty(),
-				"this spec needs a postgres backup from the main suite; objects=%v", objects)
 
 			By("fetching tag set via the LocalStack ?tagging endpoint")
 			tags, err := getS3ObjectTags(bucketName, key)
