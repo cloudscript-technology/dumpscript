@@ -3,6 +3,8 @@
 package kinde2e_test
 
 import (
+	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -14,11 +16,65 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
+
+// syncBuf is a goroutine-safe bytes.Buffer for log streaming.
+type syncBuf struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *syncBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
+
+// streamPodLogs polls until a pod matching `selector` exists in `ns`, then
+// streams its logs into `dst` via `kubectl logs -f`. Used to capture container
+// output before short-lived pods (e.g. Job pods with BackoffLimit=0) get GC'd
+// by the Job controller. Re-attaches if the pod restarts. Stops when ctx done.
+func streamPodLogs(ctx context.Context, ns, selector string, dst io.Writer) {
+	seen := map[string]bool{}
+	tick := time.NewTicker(500 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+		out, err := runOutput("kubectl", "get", "pod", "-l", selector, "-n", ns,
+			"-o", `jsonpath={range .items[*]}{.metadata.name}{"\n"}{end}`)
+		if err != nil || out == "" {
+			continue
+		}
+		for _, podName := range strings.Split(strings.TrimSpace(out), "\n") {
+			if seen[podName] || podName == "" {
+				continue
+			}
+			seen[podName] = true
+			go func(p string) {
+				c := exec.CommandContext(ctx, "kubectl", "logs", "-f", p,
+					"-n", ns, "--all-containers=true", "--tail=-1")
+				c.Stdout = dst
+				c.Stderr = dst
+				_ = c.Run()
+			}(podName)
+		}
+	}
+}
 
 // run executes a command and fails the test on error.
 func run(name string, args ...string) {
@@ -298,57 +354,6 @@ func listGCSObjects(bucket string) ([]string, error) {
 		keys[i] = it.Name
 	}
 	return keys, nil
-}
-
-// azureConnStr returns the Azure Storage connection string targeting the
-// port-forwarded Azurite endpoint on the test host.
-func azureConnStr() string {
-	return fmt.Sprintf(
-		"DefaultEndpointsProtocol=http;AccountName=%s;AccountKey=%s;BlobEndpoint=http://localhost:%s/%s;",
-		azureAccount, azuriteKey, azureLocalPort, azureAccount)
-}
-
-// runAzureCLI invokes the az CLI on the test host (talking to Azurite via the
-// port-forward) using the connection string. Handles SharedKey auth internally.
-// Idempotent for "create" operations: ignores AlreadyExists / ResourceExists.
-func runAzureCLI(args ...string) (string, error) {
-	c := exec.Command("az", args...)
-	c.Env = append(podmanEnv(), "AZURE_STORAGE_CONNECTION_STRING="+azureConnStr())
-	out, err := c.CombinedOutput()
-	if err != nil {
-		s := string(out)
-		if strings.Contains(s, "ContainerAlreadyExists") ||
-			strings.Contains(s, "ResourceAlreadyExists") {
-			return s, nil
-		}
-		return s, fmt.Errorf("az %v: %w\n%s", args, err, s)
-	}
-	return string(out), nil
-}
-
-// createAzureContainer creates a blob container in Azurite via the az CLI on
-// the test host (port-forwarded). az handles the SharedKey signature.
-func createAzureContainer(name string) {
-	GinkgoHelper()
-	out, err := runAzureCLI("storage", "container", "create", "--name", name)
-	Expect(err).NotTo(HaveOccurred(), "create Azure container %q:\n%s", name, out)
-}
-
-// listAzureBlobs returns the names of all blobs in the container via az CLI
-// on the test host (port-forwarded to Azurite).
-func listAzureBlobs(container string) ([]string, error) {
-	out, err := runAzureCLI("storage", "blob", "list",
-		"--container-name", container,
-		"--query", "[].name",
-		"--output", "tsv")
-	if err != nil {
-		return nil, err
-	}
-	out = strings.TrimSpace(out)
-	if out == "" {
-		return []string{}, nil
-	}
-	return strings.Split(out, "\n"), nil
 }
 
 // irsaS3Storage returns a YAML fragment for an S3 storage block that uses

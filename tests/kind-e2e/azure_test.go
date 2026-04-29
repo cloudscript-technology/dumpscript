@@ -19,16 +19,7 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-// PDescribe (Pending): the Azure Blob backend specs against Azurite-in-kind
-// flake on a host-header discrimination quirk in the emulator — a container
-// PUT'd via the test host's port-forward (Host=localhost) is not visible to
-// subsequent ops from the dumpscript pod (Host=azurite.svc.cluster.local).
-// The binary's storage code is correct (verified against a stand-alone
-// Azurite container in isolated probe + the operator's unit tests), so this
-// is purely a kind+Azurite test-environment issue. Tracked for follow-up;
-// the rest of the Azure code path (CR → CronJob env injection, etc.) is
-// covered by other specs and unit tests.
-var _ = PDescribe("Azure Blob backend (Azurite)", Ordered, func() {
+var _ = Describe("Azure Blob backend (Azurite)", Ordered, func() {
 	const (
 		name        = "azure-e2e"
 		prefix      = "azure-test"
@@ -50,6 +41,9 @@ spec:
   image: %s
   notifications:
     stdout: true
+  extraEnv:
+    - name: AZURE_STORAGE_CREATE_CONTAINER_IF_MISSING
+      value: "true"
   database:
     type: postgresql
     host: postgres.%s.svc.cluster.local
@@ -112,54 +106,82 @@ spec:
 	})
 
 	It("backup job uploads to Azurite", func() {
-		By("triggering a manual backup job")
-		run("kubectl", "create", "job", job,
-			"--from=cronjob/"+name, "-n", testNamespace)
+		By("triggering a manual standalone backup pod (no Job controller)")
+		// Spawn a Pod directly with the CronJob's pod-template spec, but
+		// restartPolicy=Never and no controller — Job controller otherwise
+		// deletes the pod on BackoffLimit=0 failure before we can read logs.
+		podName := job + "-pod"
+		podSpec := fmt.Sprintf(`
+apiVersion: v1
+kind: Pod
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  restartPolicy: Never
+  containers:
+    - name: dumpscript
+      image: %s
+      imagePullPolicy: IfNotPresent
+      args: ["dump"]
+      env:
+        - { name: DB_TYPE,        value: postgresql }
+        - { name: DB_HOST,        value: postgres.%s.svc.cluster.local }
+        - { name: DB_NAME,        value: testdb }
+        - { name: DB_PORT,        value: "5432" }
+        - { name: PERIODICITY,    value: daily }
+        - { name: STORAGE_BACKEND,         value: azure }
+        - { name: AZURE_STORAGE_ACCOUNT,   value: %s }
+        - { name: AZURE_STORAGE_CONTAINER, value: %s }
+        - { name: AZURE_STORAGE_PREFIX,    value: %s }
+        - { name: AZURE_STORAGE_ENDPOINT,  value: %s }
+        - { name: AZURE_STORAGE_CREATE_CONTAINER_IF_MISSING, value: "true" }
+        - { name: NOTIFY_STDOUT,  value: "true" }
+        - name: DB_USER
+          valueFrom: { secretKeyRef: { name: postgres-credentials, key: username } }
+        - name: DB_PASSWORD
+          valueFrom: { secretKeyRef: { name: postgres-credentials, key: password } }
+        - name: AZURE_STORAGE_KEY
+          valueFrom: { secretKeyRef: { name: azure-credentials, key: AZURE_STORAGE_KEY } }
+`, podName, testNamespace, dumpscriptImg, testNamespace,
+			azureAccount, azureContainer, prefix, azuriteInCluster)
+		applyManifest(podSpec)
+		defer runOutput("kubectl", "delete", "pod", podName, "-n", testNamespace, "--ignore-not-found") //nolint:errcheck
 
-		var capturedLogs string
-		By("waiting for Job to complete")
-		Eventually(func() (string, error) {
-			if logs, err := runOutput("kubectl", "logs",
-				"-l", "job-name="+job, "-n", testNamespace, "--tail=50"); err == nil && logs != "" {
-				capturedLogs = logs
-			}
-			complete, err := runOutput("kubectl", "get", "job", job,
-				"-n", testNamespace,
-				"-o", `jsonpath={.status.conditions[?(@.type=="Complete")].status}`)
-			if err != nil {
-				return "", err
-			}
-			if complete == "True" {
-				return "Complete", nil
-			}
-			failed, _ := runOutput("kubectl", "get", "job", job,
-				"-n", testNamespace,
-				"-o", `jsonpath={.status.conditions[?(@.type=="Failed")].status}`)
-			if failed == "True" {
-				return "Failed", fmt.Errorf("Azure backup job failed — captured pod logs:\n%s", capturedLogs)
-			}
-			return "", nil
-		}, 5*time.Minute, 3*time.Second).Should(Equal("Complete"))
-	})
+		By("waiting for Pod to reach Succeeded or Failed phase")
+		var phase string
+		Eventually(func() string {
+			out, _ := runOutput("kubectl", "get", "pod", podName,
+				"-n", testNamespace, "-o", "jsonpath={.status.phase}")
+			phase = out
+			return out
+		}, 3*time.Minute, 1*time.Second).Should(Or(Equal("Succeeded"), Equal("Failed")))
 
-	It("backup blob exists in Azurite with the correct path structure", func() {
-		var blobs []string
-		Eventually(func() ([]string, error) {
-			return listAzureBlobs(azureContainer)
-		}).Should(Not(BeEmpty()))
+		logs, _ := runOutput("kubectl", "logs", podName, "-n", testNamespace, "--tail=-1")
+		GinkgoWriter.Printf("--- DUMPSCRIPT POD LOGS ---\n%s\n--- END LOGS ---\n", logs)
+		Expect(phase).To(Equal("Succeeded"),
+			"dumpscript pod failed.\nLOGS:\n%s", logs)
 
-		blobs, _ = listAzureBlobs(azureContainer)
-		GinkgoWriter.Printf("Azure blobs: %v\n", blobs)
-
-		for _, key := range blobs {
-			if strings.HasPrefix(key, prefix+"/daily/") && strings.HasSuffix(key, ".gz") {
-				backupKey = key
-				break
+		// Extract the uploaded backup key from the dumpscript success event.
+		// `key` fields are redacted by the slog handler; the unredacted location
+		// appears in `path` like:
+		//   {"event":"success","path":"azure://dumpscript-azure-e2e/azure-test/daily/2026/04/29/dump_….sql.gz"}
+		// Strip the "azure://<container>/" prefix to recover just the blob key.
+		azureURIPrefix := "azure://" + azureContainer + "/"
+		for _, ln := range strings.Split(logs, "\n") {
+			if i := strings.Index(ln, `"path":"`+azureURIPrefix); i >= 0 {
+				rest := ln[i+len(`"path":"`)+len(azureURIPrefix):]
+				if j := strings.Index(rest, `"`); j >= 0 {
+					candidate := rest[:j]
+					if strings.HasPrefix(candidate, prefix+"/daily/") && strings.HasSuffix(candidate, ".gz") {
+						backupKey = candidate
+						break
+					}
+				}
 			}
 		}
 		Expect(backupKey).NotTo(BeEmpty(),
-			"expected a blob matching %s/daily/**/*.gz in Azurite, got: %v",
-			prefix, blobs)
+			"could not extract uploaded backup key from dumpscript logs:\n%s", logs)
 	})
 
 	It("Restore from Azure recovers the data", func() {

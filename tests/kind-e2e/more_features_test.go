@@ -149,14 +149,16 @@ var _ = Describe("Engine sub-block env injection", func() {
 	// other 6 engines use the same translation path.
 
 	type subBlockCase struct {
-		name           string
-		manifest       string
-		expectInOpts   []string
+		name         string
+		crName       string
+		manifest     string
+		expectInOpts []string
 	}
 
 	cases := []subBlockCase{
 		{
-			name: "redis db + tls → -n + --tls in DUMP_OPTIONS",
+			name:   "redis db + tls → -n + --tls in DUMP_OPTIONS",
+			crName: "redis-subblock-e2e",
 			manifest: fmt.Sprintf(`
 apiVersion: dumpscript.cloudscript.com.br/v1alpha1
 kind: BackupSchedule
@@ -183,7 +185,8 @@ spec:
 			expectInOpts: []string{"-n", "5", "--tls"},
 		},
 		{
-			name: "sqlserver trustServerCertificate → -W in DUMP_OPTIONS",
+			name:   "sqlserver trustServerCertificate → -W in DUMP_OPTIONS",
+			crName: "sqlserver-subblock-e2e",
 			manifest: fmt.Sprintf(`
 apiVersion: dumpscript.cloudscript.com.br/v1alpha1
 kind: BackupSchedule
@@ -217,36 +220,16 @@ spec:
 		tc := tc // pin
 		It(tc.name, func() {
 			applyManifest(tc.manifest)
-			defer func() {
-				// Extract the metadata.name from the manifest to clean up.
-				for _, line := range strings.Split(tc.manifest, "\n") {
-					if strings.Contains(line, "name:") && strings.Contains(line, "-e2e") {
-						n := strings.TrimSpace(strings.SplitN(line, "name:", 2)[1])
-						n = strings.Trim(n, ",}")
-						runOutput("kubectl", "delete", "backupschedule", n, //nolint:errcheck
-							"-n", testNamespace, "--ignore-not-found")
-						break
-					}
-				}
-			}()
-
-			// Find the cronjob name from the manifest (same as backupschedule name).
-			var crName string
-			for _, line := range strings.Split(tc.manifest, "\n") {
-				if strings.Contains(line, "name:") && strings.Contains(line, "-e2e") {
-					crName = strings.TrimSpace(strings.SplitN(line, "name:", 2)[1])
-					crName = strings.Trim(crName, ",}")
-					break
-				}
-			}
+			defer runOutput("kubectl", "delete", "backupschedule", tc.crName, //nolint:errcheck
+				"-n", testNamespace, "--ignore-not-found")
 
 			Eventually(func() string {
-				out, _ := runOutput("kubectl", "get", "cronjob", crName,
+				out, _ := runOutput("kubectl", "get", "cronjob", tc.crName,
 					"-n", testNamespace, "-o", "jsonpath={.metadata.name}")
 				return out
-			}).Should(Equal(crName))
+			}).Should(Equal(tc.crName))
 
-			out, err := runOutput("kubectl", "get", "cronjob", crName,
+			out, err := runOutput("kubectl", "get", "cronjob", tc.crName,
 				"-n", testNamespace,
 				"-o", `jsonpath={range .spec.jobTemplate.spec.template.spec.containers[0].env[*]}{.name}={.value}{"\n"}{end}`)
 			Expect(err).NotTo(HaveOccurred())
@@ -545,21 +528,25 @@ var _ = Describe("Restore --dry-run", Ordered, func() {
 
 	It("a dryRun=true Restore CR reaches Succeeded without applying anything", func() {
 		var existingKey string
+		// dryRun only needs Storage.Exists to return true — accept ANY postgres
+		// backup any prior spec has uploaded so we are not coupled to the order
+		// in which Ordered containers run (Ginkgo randomize-all otherwise).
 		Eventually(func() string {
 			objects, err := listS3Objects(bucketName)
 			if err != nil {
 				return ""
 			}
 			for _, k := range objects {
-				if strings.HasPrefix(k, "main-e2e/daily/") &&
-					(strings.HasSuffix(k, ".gz") || strings.HasSuffix(k, ".zst")) {
+				if strings.Contains(k, "/daily/") &&
+					(strings.HasSuffix(k, ".gz") || strings.HasSuffix(k, ".zst")) &&
+					!strings.HasSuffix(k, ".manifest.json") {
 					existingKey = k
 					return k
 				}
 			}
 			return ""
 		}, 5*time.Minute, 5*time.Second).ShouldNot(BeEmpty(),
-			"this spec needs a postgres backup from the main suite to exist as sourceKey")
+			"this spec needs any postgres/etc backup .gz/.zst to exist as sourceKey")
 
 		// Drop the marker so that an *actually-applied* restore would
 		// recreate it. dryRun should NOT recreate it.

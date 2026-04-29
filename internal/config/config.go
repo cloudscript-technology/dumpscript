@@ -89,6 +89,11 @@ type Azure struct {
 	// Used to target Azurite emulator or custom Azure government clouds.
 	// Example: http://azurite:10000/devstoreaccount1
 	Endpoint string `envconfig:"AZURE_STORAGE_ENDPOINT"`
+	// CreateContainerIfMissing creates the blob container at preflight time
+	// when it does not yet exist. Default false (containers are typically
+	// pre-provisioned by ops + IaC). Useful for ephemeral/test environments
+	// where the operator owns the container lifecycle end-to-end.
+	CreateContainerIfMissing bool `envconfig:"AZURE_STORAGE_CREATE_CONTAINER_IF_MISSING" default:"false"`
 }
 
 // GCS native (Google Cloud Storage) — uses Application Default Credentials.

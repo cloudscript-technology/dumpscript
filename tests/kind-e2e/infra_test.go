@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,9 +18,8 @@ import (
 
 // portForwardProc holds the kubectl port-forward processes so AfterSuite can kill them.
 var (
-	portForwardProc      *exec.Cmd
-	gcsPortForwardProc   *exec.Cmd
-	azurePortForwardProc *exec.Cmd
+	portForwardProc    *exec.Cmd
+	gcsPortForwardProc *exec.Cmd
 )
 
 var _ = BeforeSuite(func() {
@@ -29,7 +27,7 @@ var _ = BeforeSuite(func() {
 	SetDefaultEventuallyPollingInterval(3 * time.Second)
 
 	By("checking required tools")
-	requireTools("kind", "kubectl", "docker", "terragrunt", "aws", "az")
+	requireTools("kind", "kubectl", "docker", "terragrunt", "aws")
 
 	By("cleaning up any leftover kind cluster from a previous run")
 	exec.Command("kind", "delete", "cluster", "--name", clusterName).Run() //nolint:errcheck
@@ -60,17 +58,20 @@ var _ = BeforeSuite(func() {
 	}
 
 	// Wait for all DB rollouts together so they roll out in parallel.
+	// 10min covers cold-cache image pulls — mongo:7 alone is ~700MB and all
+	// six DB images pulling concurrently can saturate slower connections.
+	// Falls through immediately when images are already cached on the node.
 	for _, dep := range []string{"postgres", "mysql", "mariadb", "mongodb", "redis", "etcd"} {
-		run("kubectl", "rollout", "status", "deployment/"+dep, "-n", testNamespace, "--timeout=180s")
+		run("kubectl", "rollout", "status", "deployment/"+dep, "-n", testNamespace, "--timeout=600s")
 	}
 
 	By("deploying fake-gcs-server (GCS emulator)")
 	run("kubectl", "apply", "-f", filepath.Join(manifests, "fake-gcs.yaml"), "-n", testNamespace)
-	run("kubectl", "rollout", "status", "deployment/fake-gcs", "-n", testNamespace, "--timeout=120s")
+	run("kubectl", "rollout", "status", "deployment/fake-gcs", "-n", testNamespace, "--timeout=300s")
 
 	By("deploying Azurite (Azure Blob emulator)")
 	run("kubectl", "apply", "-f", filepath.Join(manifests, "azurite.yaml"), "-n", testNamespace)
-	run("kubectl", "rollout", "status", "deployment/azurite", "-n", testNamespace, "--timeout=120s")
+	run("kubectl", "rollout", "status", "deployment/azurite", "-n", testNamespace, "--timeout=300s")
 
 	By(fmt.Sprintf("port-forwarding LocalStack → localhost:%s", lsLocalPort))
 	portForwardProc = exec.Command("kubectl", "port-forward",
@@ -99,29 +100,11 @@ var _ = BeforeSuite(func() {
 	By("creating GCS bucket via fake-gcs-server REST API")
 	createGCSBucket(gcsBucketName)
 
-	By(fmt.Sprintf("port-forwarding Azurite → localhost:%s", azureLocalPort))
-	azurePortForwardProc = exec.Command("kubectl", "port-forward",
-		"svc/azurite", azureLocalPort+":10000",
-		"-n", testNamespace)
-	azurePortForwardProc.Env = podmanEnv()
-	azurePortForwardProc.Stdout = io.Discard
-	azurePortForwardProc.Stderr = io.Discard
-	Expect(azurePortForwardProc.Start()).To(Succeed(), "failed to start azurite port-forward")
-
-	By("waiting for Azurite TCP to be reachable")
-	// Azurite returns 400 for unauthenticated GETs, so we use a TCP probe via
-	// a quick HTTP HEAD that we expect to fail with 4xx (not connection refused).
-	Eventually(func() error {
-		resp, err := http.Head("http://localhost:" + azureLocalPort + "/")
-		if err != nil {
-			return err
-		}
-		resp.Body.Close()
-		return nil
-	}, 2*time.Minute, 2*time.Second).Should(Succeed())
-
-	By("creating Azure container via Shared Key REST API")
-	createAzureContainer(azureContainer)
+	// Azurite container creation is delegated to dumpscript itself via the
+	// AZURE_STORAGE_CREATE_CONTAINER_IF_MISSING=true config flag, set on
+	// the Azure BackupSchedule via .spec.extraEnv. Routes through the same
+	// in-cluster Service DNS the operator-driven CronJob uses, so there is
+	// no host-vs-cluster Host-header divergence.
 
 	By("provisioning S3 bucket via Terragrunt")
 	runTerragrunt("apply", "-auto-approve")
@@ -206,11 +189,6 @@ var _ = AfterSuite(func() {
 		gcsPortForwardProc.Process.Kill() //nolint:errcheck
 		gcsPortForwardProc.Wait()         //nolint:errcheck
 	}
-	if azurePortForwardProc != nil && azurePortForwardProc.Process != nil {
-		azurePortForwardProc.Process.Kill() //nolint:errcheck
-		azurePortForwardProc.Wait()         //nolint:errcheck
-	}
-
 	By("deleting kind cluster")
 	exec.Command("kind", "delete", "cluster", "--name", clusterName).Run() //nolint:errcheck
 })

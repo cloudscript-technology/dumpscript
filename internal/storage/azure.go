@@ -28,7 +28,7 @@ type Azure struct {
 	client *azblob.Client
 }
 
-func NewAzure(_ context.Context, cfg *config.Config, log *slog.Logger) (*Azure, error) {
+func NewAzure(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Azure, error) {
 	serviceURL := cfg.Azure.Endpoint
 	if serviceURL == "" {
 		serviceURL = fmt.Sprintf("https://%s.blob.core.windows.net", cfg.Azure.Account)
@@ -53,7 +53,29 @@ func NewAzure(_ context.Context, cfg *config.Config, log *slog.Logger) (*Azure, 
 		client = c
 	}
 
-	return &Azure{cfg: cfg, log: log, client: client}, nil
+	a := &Azure{cfg: cfg, log: log, client: client}
+
+	// Opt-in: create the blob container at startup if missing. Idempotent —
+	// 409 ContainerAlreadyExists is treated as success. By default
+	// dumpscript expects the container to be pre-provisioned by ops/IaC.
+	if cfg.Azure.CreateContainerIfMissing {
+		if _, err := client.CreateContainer(ctx, cfg.Azure.Container, nil); err != nil {
+			if bloberror.HasCode(err, bloberror.ContainerAlreadyExists) {
+				log.Info("azure: container already exists", "container", cfg.Azure.Container)
+			} else {
+				var respErr *azcore.ResponseError
+				if errors.As(err, &respErr) {
+					return nil, fmt.Errorf("create container %q: status=%d code=%q msg=%q",
+						cfg.Azure.Container, respErr.StatusCode, respErr.ErrorCode, respErr.Error())
+				}
+				return nil, fmt.Errorf("create container %q: %w", cfg.Azure.Container, err)
+			}
+		} else {
+			log.Info("azure: created blob container", "container", cfg.Azure.Container)
+		}
+	}
+
+	return a, nil
 }
 
 func (a *Azure) Upload(ctx context.Context, localPath, key string) error {

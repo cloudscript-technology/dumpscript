@@ -38,13 +38,18 @@ const (
 
 	// Azure — Azurite emulator deployed in the kind cluster.
 	azureContainer = "dumpscript-azure-e2e"
-	azureLocalPort = "14000" // port-forward from azurite :10000
 	azureAccount   = "devstoreaccount1"
 	// azuriteKey is the Microsoft-published well-known Azurite emulator key.
 	// Public, safe for local emulator use only.
 	azuriteKey = "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw=="
 	// Azurite blob endpoint reachable from inside the kind cluster.
-	azuriteInCluster = "http://azurite." + testNamespace + ".svc.cluster.local:10000/" + azureAccount
+	// Uses the SHORT same-namespace Service hostname (no FQDN). Azurite v3.35
+	// returns 400 with empty body for requests whose Host header has many dots
+	// (e.g. azurite.<ns>.svc.cluster.local) — its production-style URL parser
+	// likely tries to extract an account name from the subdomains and bails.
+	// Short hostnames (azurite, localhost, 127.0.0.1) and "real" Azure FQDNs
+	// (<account>.blob.core.windows.net) work — only the K8s FQDN trips it.
+	azuriteInCluster = "http://azurite:10000/" + azureAccount
 )
 
 var (
