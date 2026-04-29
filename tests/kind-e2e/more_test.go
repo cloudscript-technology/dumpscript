@@ -17,6 +17,15 @@ func todayPath() string {
 	return fmt.Sprintf("%04d/%02d/%02d", now.Year(), now.Month(), now.Day())
 }
 
+// tomorrowPath returns the date portion of an S3 key for the day after today.
+// Used by the lock-contention spec to survive UTC midnight crossings during
+// the suite — seeding today + tomorrow guarantees a lock matches whichever
+// date the binary computes at acquire time.
+func tomorrowPath() string {
+	now := time.Now().UTC().AddDate(0, 0, 1)
+	return fmt.Sprintf("%04d/%02d/%02d", now.Year(), now.Month(), now.Day())
+}
+
 // ── Retention ─────────────────────────────────────────────────────────────────
 
 var _ = Describe("Retention", Ordered, func() {
@@ -130,8 +139,16 @@ var _ = Describe("Lock contention", Ordered, func() {
 		prefix = "lock-test"
 	)
 
-	// Lock key format: <prefix>/<periodicity>/<date>/.lock
+	// Lock key format: <prefix>/<periodicity>/<date>/.lock — the binary
+	// computes this key at acquire time using time.Now().UTC(). Tests seed
+	// the lock at BeforeAll time. When the suite runs across UTC midnight
+	// the two views can disagree (BeforeAll says "2026-04-28", the binary
+	// later says "2026-04-29") — the seeded lock wouldn't match what the
+	// binary checks, the dump would proceed, and the test would fail.
+	// Mitigation: seed both today and tomorrow so whichever date the
+	// binary lands on, a lock is in place.
 	lockKey := prefix + "/daily/" + todayPath() + "/.lock"
+	tomorrowLockKey := prefix + "/daily/" + tomorrowPath() + "/.lock"
 
 	schedule := fmt.Sprintf(`
 apiVersion: dumpscript.cloudscript.com.br/v1alpha1
@@ -163,8 +180,9 @@ spec:
 	var objectsBefore []string
 
 	BeforeAll(func() {
-		By("pre-seeding today's lock to simulate a concurrent run")
+		By("pre-seeding today's AND tomorrow's lock to survive UTC midnight crossings")
 		seedS3Object(lockKey)
+		seedS3Object(tomorrowLockKey)
 
 		applyManifest(schedule)
 		Eventually(func() string {
