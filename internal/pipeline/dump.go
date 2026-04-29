@@ -15,6 +15,7 @@ import (
 	"github.com/cloudscript-technology/dumpscript/internal/config"
 	"github.com/cloudscript-technology/dumpscript/internal/dumper"
 	"github.com/cloudscript-technology/dumpscript/internal/lock"
+	"github.com/cloudscript-technology/dumpscript/internal/manifest"
 	"github.com/cloudscript-technology/dumpscript/internal/metrics"
 	"github.com/cloudscript-technology/dumpscript/internal/notify"
 	"github.com/cloudscript-technology/dumpscript/internal/retention"
@@ -137,7 +138,7 @@ func (p *Dump) Run(ctx context.Context) (retErr error) {
 	}
 	defer func() { _ = art.Cleanup() }()
 
-	displayPath, err := p.uploadArtifact(ctx, log, art, now)
+	displayPath, err := p.uploadArtifact(ctx, log, art, now, started, execID)
 	if err != nil {
 		return err
 	}
@@ -230,7 +231,10 @@ func (p *Dump) dumpAndVerify(ctx context.Context, log *slog.Logger) (*dumper.Art
 }
 
 // uploadArtifact pushes the dump to storage and returns its display path.
-func (p *Dump) uploadArtifact(ctx context.Context, log *slog.Logger, art *dumper.Artifact, now time.Time) (string, error) {
+// Also writes a sidecar manifest.json describing the run; manifest upload
+// failure is logged but does not fail the pipeline (the dump itself is the
+// authoritative artifact and is already safely uploaded).
+func (p *Dump) uploadArtifact(ctx context.Context, log *slog.Logger, art *dumper.Artifact, now, started time.Time, execID string) (string, error) {
 	filename := filepath.Base(art.Path)
 	key := storage.BuildKey(p.d.Config, now, filename)
 	log.Info("├─ [4/4] upload to storage", "key", key, "size", art.Size)
@@ -241,5 +245,44 @@ func (p *Dump) uploadArtifact(ctx context.Context, log *slog.Logger, art *dumper
 	p.d.Metrics.RecordUpload(string(p.d.Config.Backend), time.Since(uploadStart), art.Size)
 	displayPath := p.d.Storage.DisplayPath(key)
 	log.Info("│   ✔ upload complete", "path", displayPath, "elapsed", time.Since(uploadStart))
+
+	// Sidecar manifest. Best-effort: failure here is logged as a warning,
+	// not propagated, because the dump itself succeeded — losing the
+	// manifest is recoverable, losing the dump is not.
+	if err := p.uploadManifest(ctx, log, art, key, started, execID); err != nil {
+		log.Warn("manifest upload failed (dump itself is safe)",
+			"key", manifest.SidecarKey(key), "err", err)
+	}
+
 	return displayPath, nil
+}
+
+// uploadManifest builds the run's manifest.json and uploads it as a sidecar.
+func (p *Dump) uploadManifest(ctx context.Context, log *slog.Logger, art *dumper.Artifact, dumpKey string, started time.Time, execID string) error {
+	completed := time.Now()
+	m := &manifest.Manifest{
+		ExecutionID:     execID,
+		Engine:          string(p.d.Config.DB.Type),
+		DBName:          p.d.Config.DB.Name,
+		DBHost:          p.d.Config.DB.Host,
+		Periodicity:     string(p.d.Config.Periodicity),
+		Key:             dumpKey,
+		SizeBytes:       art.Size,
+		Checksum:        art.Checksum,
+		Compression:     p.d.Config.CompressionType,
+		DumpOptions:     p.d.Config.DB.DumpOptions,
+		StartedAt:       started,
+		CompletedAt:     completed,
+		DurationSeconds: completed.Sub(started).Seconds(),
+	}
+	body, err := m.Marshal()
+	if err != nil {
+		return err
+	}
+	manifestKey := manifest.SidecarKey(dumpKey)
+	if err := p.d.Storage.UploadBytes(ctx, body, manifestKey); err != nil {
+		return err
+	}
+	log.Info("│   ✔ manifest uploaded", "key", manifestKey, "size", len(body))
+	return nil
 }
