@@ -32,6 +32,7 @@ type Manifest struct {
 	Checksum        string    `json:"checksum,omitempty"`        // hex sha256
 	ChecksumType    string    `json:"checksumType,omitempty"`    // "sha256"
 	Compression     string    `json:"compression,omitempty"`     // "gzip" | "zstd"
+	Encryption      string    `json:"encryption,omitempty"`      // "" | "aes-256-gcm"
 	DumpOptions     string    `json:"dumpOptions,omitempty"`     // raw DUMP_OPTIONS at dump time
 
 	// Timing

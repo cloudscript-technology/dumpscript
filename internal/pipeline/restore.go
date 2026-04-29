@@ -6,8 +6,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/cloudscript-technology/dumpscript/internal/config"
+	"github.com/cloudscript-technology/dumpscript/internal/crypt"
 	"github.com/cloudscript-technology/dumpscript/internal/restorer"
 	"github.com/cloudscript-technology/dumpscript/internal/storage"
 	"github.com/cloudscript-technology/dumpscript/internal/verifier"
@@ -64,14 +66,33 @@ func (p *Restore) Run(ctx context.Context) error {
 	local := filepath.Join(p.d.Config.WorkDir, "dump_restore."+ext+".gz")
 	defer func() { _ = os.Remove(local) }()
 
+	// Encrypted artifacts have a `.aes` suffix. Adjust the local download
+	// path so the `.aes` is preserved on disk; we'll decrypt in-place
+	// before passing the plaintext to the restorer.
+	if strings.HasSuffix(key, ".aes") {
+		local += ".aes"
+	}
+
 	p.d.Log.Info("downloading dump", "key", key, "local", local)
 	if err := p.d.Storage.Download(ctx, key, local); err != nil {
 		return fmt.Errorf("download: %w", err)
 	}
 
+	// Decrypt if the artifact is AES-encrypted (suffix `.aes`). Sidesteps
+	// the restorer entirely — it just sees the original .gz / .zst path.
+	restoreSrc := local
+	if strings.HasSuffix(local, ".aes") {
+		decrypted, err := p.decryptArtifact(local)
+		if err != nil {
+			return fmt.Errorf("decrypt artifact: %w", err)
+		}
+		defer func() { _ = os.Remove(decrypted) }()
+		restoreSrc = decrypted
+	}
+
 	p.d.Log.Info("applying restore",
 		"db_type", p.d.Config.DB.Type, "host", p.d.Config.DB.Host, "db_name", p.d.Config.DB.Name)
-	if err := p.d.Restorer.Restore(ctx, local); err != nil {
+	if err := p.d.Restorer.Restore(ctx, restoreSrc); err != nil {
 		return fmt.Errorf("restore: %w", err)
 	}
 
@@ -86,4 +107,24 @@ func (p *Restore) Run(ctx context.Context) error {
 
 	p.d.Log.Info("restore completed", "key", key)
 	return nil
+}
+
+// decryptArtifact reads the AES-encrypted ciphertext at encPath, decrypts it
+// using the configured key file, and writes plaintext to the same path with
+// the trailing `.aes` stripped. Returns the plaintext path. The caller is
+// responsible for removing it after use.
+func (p *Restore) decryptArtifact(encPath string) (string, error) {
+	if p.d.Config.EncryptionKeyFile == "" {
+		return "", fmt.Errorf("artifact has .aes suffix but ENCRYPTION_KEY_FILE is not set")
+	}
+	key, err := crypt.LoadKey(p.d.Config.EncryptionKeyFile)
+	if err != nil {
+		return "", fmt.Errorf("load key: %w", err)
+	}
+	plainPath := strings.TrimSuffix(encPath, ".aes")
+	if err := crypt.DecryptFile(encPath, plainPath, key); err != nil {
+		return "", err
+	}
+	p.d.Log.Info("artifact decrypted (AES-256-GCM)", "src", encPath, "dst", plainPath)
+	return plainPath, nil
 }
