@@ -220,6 +220,14 @@ type Config struct {
 	// against provider-account leaks; client-side encryption defends
 	// additionally against the storage admin reading the bytes.
 	EncryptionKeyFile string `envconfig:"ENCRYPTION_KEY_FILE"`
+
+	// EncryptionKey — alternative to EncryptionKeyFile: the 64-character
+	// hex-encoded AES key passed directly. Useful in environments where
+	// mounting a Secret as a file is awkward (kind-e2e tests, ad-hoc
+	// runs). Production deployments should prefer the *File path so the
+	// raw key never sits in `kubectl describe pod` output.
+	// When both are set, EncryptionKey wins (in-memory, never serialised).
+	EncryptionKey string `envconfig:"ENCRYPTION_KEY"`
 }
 
 // Load reads the configuration from environment variables.

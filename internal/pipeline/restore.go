@@ -110,16 +110,16 @@ func (p *Restore) Run(ctx context.Context) error {
 }
 
 // decryptArtifact reads the AES-encrypted ciphertext at encPath, decrypts it
-// using the configured key file, and writes plaintext to the same path with
-// the trailing `.aes` stripped. Returns the plaintext path. The caller is
-// responsible for removing it after use.
+// using the configured key (env hex or key file — env wins), and writes
+// plaintext to a sibling path with the trailing `.aes` stripped. Returns
+// the plaintext path; the caller is responsible for removing it after use.
 func (p *Restore) decryptArtifact(encPath string) (string, error) {
-	if p.d.Config.EncryptionKeyFile == "" {
-		return "", fmt.Errorf("artifact has .aes suffix but ENCRYPTION_KEY_FILE is not set")
-	}
-	key, err := crypt.LoadKey(p.d.Config.EncryptionKeyFile)
+	key, err := loadEncryptionKey(p.d.Config.EncryptionKey, p.d.Config.EncryptionKeyFile)
 	if err != nil {
 		return "", fmt.Errorf("load key: %w", err)
+	}
+	if key == nil {
+		return "", fmt.Errorf("artifact has .aes suffix but neither ENCRYPTION_KEY nor ENCRYPTION_KEY_FILE is set")
 	}
 	plainPath := strings.TrimSuffix(encPath, ".aes")
 	if err := crypt.DecryptFile(encPath, plainPath, key); err != nil {
