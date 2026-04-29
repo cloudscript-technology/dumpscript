@@ -56,7 +56,32 @@ func NewAzure(_ context.Context, cfg *config.Config, log *slog.Logger) (*Azure, 
 	return &Azure{cfg: cfg, log: log, client: client}, nil
 }
 
+// ensureContainer creates the configured container if it does not exist yet.
+// Idempotent: a 409 ContainerAlreadyExists from CreateContainer is treated as
+// success. Real Azure: the container is normally provisioned via IaC and
+// CreateContainer would 409 — that's still fine. Azurite-in-kind: container
+// state is host-header discriminated, so the first write from the dumpscript
+// pod's Host context might not see a container previously created from the
+// test host's port-forward (Host=localhost). Calling CreateContainer from
+// within Upload/UploadBytes ensures the container exists *under the dumpscript
+// pod's identity*, after which the same-Host List/Head/Put all succeed.
+func (a *Azure) ensureContainer(ctx context.Context) error {
+	containerClient := a.client.ServiceClient().NewContainerClient(a.cfg.Azure.Container)
+	_, err := containerClient.Create(ctx, nil)
+	if err == nil {
+		return nil
+	}
+	if bloberror.HasCode(err, bloberror.ContainerAlreadyExists) {
+		return nil
+	}
+	return fmt.Errorf("ensure container %q: %w", a.cfg.Azure.Container, err)
+}
+
 func (a *Azure) Upload(ctx context.Context, localPath, key string) error {
+	if err := a.ensureContainer(ctx); err != nil {
+		return err
+	}
+
 	f, err := os.Open(localPath)
 	if err != nil {
 		return err
@@ -100,6 +125,9 @@ func (a *Azure) Upload(ctx context.Context, localPath, key string) error {
 }
 
 func (a *Azure) UploadBytes(ctx context.Context, data []byte, key string) error {
+	if err := a.ensureContainer(ctx); err != nil {
+		return err
+	}
 	_, err := a.client.UploadBuffer(ctx, a.cfg.Azure.Container, key, data, nil)
 	return err
 }
