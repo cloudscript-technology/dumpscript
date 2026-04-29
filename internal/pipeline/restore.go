@@ -35,6 +35,28 @@ func (p *Restore) Run(ctx context.Context) error {
 		return fmt.Errorf("mkdir workdir: %w", err)
 	}
 
+	key := p.d.Config.S3.Key
+
+	// Dry-run short-circuit: validate config, sourceKey existence, and DB
+	// reachability without downloading or applying. Mirrors the dump
+	// pipeline's DRY_RUN handling so a freshly applied Restore CR can be
+	// smoke-tested before it actually touches the target DB.
+	if p.d.Config.DryRun {
+		exists, err := p.d.Storage.Exists(ctx, key)
+		if err != nil {
+			return fmt.Errorf("dry-run: probe sourceKey: %w", err)
+		}
+		if !exists {
+			return fmt.Errorf("dry-run: sourceKey %q not found in storage", key)
+		}
+		if err := verifier.PostRestore(ctx, p.d.Config, p.d.Log); err != nil {
+			return fmt.Errorf("dry-run: target DB unreachable: %w", err)
+		}
+		p.d.Log.Info("dry-run: validated config + sourceKey + target DB reachability",
+			"key", key, "db_host", p.d.Config.DB.Host)
+		return nil
+	}
+
 	ext := "sql"
 	if p.d.Config.DB.Type == config.DBMongo {
 		ext = "archive"
@@ -42,7 +64,6 @@ func (p *Restore) Run(ctx context.Context) error {
 	local := filepath.Join(p.d.Config.WorkDir, "dump_restore."+ext+".gz")
 	defer func() { _ = os.Remove(local) }()
 
-	key := p.d.Config.S3.Key
 	p.d.Log.Info("downloading dump", "key", key, "local", local)
 	if err := p.d.Storage.Download(ctx, key, local); err != nil {
 		return fmt.Errorf("download: %w", err)
