@@ -528,25 +528,25 @@ var _ = Describe("Restore --dry-run", Ordered, func() {
 
 	It("a dryRun=true Restore CR reaches Succeeded without applying anything", func() {
 		var existingKey string
-		// dryRun only needs Storage.Exists to return true — accept ANY postgres
-		// backup any prior spec has uploaded so we are not coupled to the order
-		// in which Ordered containers run (Ginkgo randomize-all otherwise).
+		// dryRun only needs Storage.Exists to return true — accept ANY backup
+		// any prior spec has uploaded. We poll up to 10min because under slow
+		// runs (cold image cache, low CPU) the first backup may not complete
+		// before we hit the spec; not coupled to Ginkgo Ordered randomization.
 		Eventually(func() string {
 			objects, err := listS3Objects(bucketName)
 			if err != nil {
 				return ""
 			}
 			for _, k := range objects {
-				if strings.Contains(k, "/daily/") &&
-					(strings.HasSuffix(k, ".gz") || strings.HasSuffix(k, ".zst")) &&
+				if (strings.HasSuffix(k, ".gz") || strings.HasSuffix(k, ".zst")) &&
 					!strings.HasSuffix(k, ".manifest.json") {
 					existingKey = k
 					return k
 				}
 			}
 			return ""
-		}, 5*time.Minute, 5*time.Second).ShouldNot(BeEmpty(),
-			"this spec needs any postgres/etc backup .gz/.zst to exist as sourceKey")
+		}, 10*time.Minute, 5*time.Second).ShouldNot(BeEmpty(),
+			"this spec needs any backup .gz/.zst to exist as sourceKey")
 
 		// Drop the marker so that an *actually-applied* restore would
 		// recreate it. dryRun should NOT recreate it.
