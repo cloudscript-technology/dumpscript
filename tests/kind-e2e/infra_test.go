@@ -38,7 +38,19 @@ var _ = BeforeSuite(func() {
 
 	By("creating kind cluster")
 	run("kind", "create", "cluster", "--name", clusterName, "--wait", "120s")
-	run("kubectl", "config", "use-context", "kind-"+clusterName)
+
+	// Export the kind cluster's kubeconfig to a suite-local file and pin
+	// $KUBECONFIG to it for the rest of this process. This isolates the
+	// suite from the user's ~/.kube/config: no surprise context switches if
+	// some other tool/IDE/shell rewrites the global config mid-run, and no
+	// risk of leaking unrelated contexts (e.g. production clusters) into
+	// kubectl apply commands that should hit only the kind cluster.
+	suiteKubeconfig := "/tmp/dumpscript-kind-e2e.kubeconfig"
+	kubeconfigCmd := cmd("kind", "get", "kubeconfig", "--name", clusterName)
+	out, err := kubeconfigCmd.Output()
+	Expect(err).NotTo(HaveOccurred(), "kind get kubeconfig")
+	Expect(os.WriteFile(suiteKubeconfig, out, 0o600)).To(Succeed(), "write %s", suiteKubeconfig)
+	Expect(os.Setenv("KUBECONFIG", suiteKubeconfig)).To(Succeed(), "set KUBECONFIG")
 
 	By("creating test namespace")
 	run("kubectl", "create", "namespace", testNamespace)
