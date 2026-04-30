@@ -513,12 +513,19 @@ spec:
 })
 
 var _ = Describe("Restore --dry-run", Ordered, func() {
-	const restoreName = "dryrun-restore-e2e"
+	const (
+		restoreName = "dryrun-restore-e2e"
+		// Self-seeded fixture key — dryRun only checks Storage.Exists, so an
+		// empty object suffices and removes any cross-spec ordering coupling.
+		seededDryRunKey = "dryrun-fixture/seeded.sql.gz"
+	)
 
 	BeforeAll(func() {
-		// dryRun probes the sourceKey via Storage.Exists. Need a real key to
-		// exist — reuse anything the main suite already produced. Find one
-		// (any postgres backup) before applying the Restore CR.
+		// Self-seed an empty fixture so the spec is independent of any other
+		// test having already uploaded a backup. dryRun's pipeline only does
+		// Storage.Exists(sourceKey) + DB reachability — no download/parse —
+		// so a zero-byte object at this key is sufficient.
+		seedS3Object(seededDryRunKey)
 	})
 
 	AfterAll(func() {
@@ -527,26 +534,7 @@ var _ = Describe("Restore --dry-run", Ordered, func() {
 	})
 
 	It("a dryRun=true Restore CR reaches Succeeded without applying anything", func() {
-		var existingKey string
-		// dryRun only needs Storage.Exists to return true — accept ANY backup
-		// any prior spec has uploaded. We poll up to 10min because under slow
-		// runs (cold image cache, low CPU) the first backup may not complete
-		// before we hit the spec; not coupled to Ginkgo Ordered randomization.
-		Eventually(func() string {
-			objects, err := listS3Objects(bucketName)
-			if err != nil {
-				return ""
-			}
-			for _, k := range objects {
-				if (strings.HasSuffix(k, ".gz") || strings.HasSuffix(k, ".zst")) &&
-					!strings.HasSuffix(k, ".manifest.json") {
-					existingKey = k
-					return k
-				}
-			}
-			return ""
-		}, 10*time.Minute, 5*time.Second).ShouldNot(BeEmpty(),
-			"this spec needs any backup .gz/.zst to exist as sourceKey")
+		existingKey := seededDryRunKey
 
 		// Drop the marker so that an *actually-applied* restore would
 		// recreate it. dryRun should NOT recreate it.
