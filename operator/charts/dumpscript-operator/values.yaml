@@ -1,5 +1,11 @@
 ## Operator image. Override `repository` + `tag` to pin a release; `digest`
 ## takes precedence over `tag` when set (preferred for production).
+##
+## NOTE: the default repository points at the org publishing the chart, but
+## the same chart can be hosted under multiple GHCR namespaces (upstream +
+## forks). Always pass `--set image.repository=ghcr.io/<owner>/dumpscript-operator`
+## when installing from a fork, otherwise the pull will 403 because the image
+## was pushed to the fork's namespace, not cloudscript-technology's.
 image:
   repository: ghcr.io/cloudscript-technology/dumpscript-operator
   tag: ""              # defaults to .Chart.appVersion when empty

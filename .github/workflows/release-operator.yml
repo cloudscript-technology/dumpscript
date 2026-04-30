@@ -105,15 +105,18 @@ jobs:
           echo "${{ secrets.GITHUB_TOKEN }}" \
             | helm registry login ghcr.io --username ${{ github.actor }} --password-stdin
 
-      - name: Pin chart version + appVersion
+      - name: Pin chart version + appVersion + image repo
         run: |
           VERSION="${{ needs.resolve-version.outputs.version }}"
           # Chart.yaml uses `version` (chart) and `appVersion` (operator binary).
           # We align both to the released tag for predictable installs.
           sed -i "s/^version:.*/version: ${VERSION}/"      operator/charts/dumpscript-operator/Chart.yaml
           sed -i "s/^appVersion:.*/appVersion: \"${VERSION}\"/" operator/charts/dumpscript-operator/Chart.yaml
-          # Pin the operator image tag in values.yaml so a `helm install` with
-          # no overrides pulls the matching operator version.
+          # Pin the operator image repo + tag in values.yaml so a `helm install`
+          # with no overrides pulls the operator that was built in this same
+          # release. The repo auto-aligns to the publishing GHCR namespace —
+          # avoids the "chart from fork pointing at upstream image" 403 trap.
+          sed -i "s|repository: ghcr.io/.*/dumpscript-operator|repository: ghcr.io/${{ env.OPERATOR_IMAGE }}|" operator/charts/dumpscript-operator/values.yaml
           sed -i "s|tag: \"\"|tag: \"${VERSION}\"|" operator/charts/dumpscript-operator/values.yaml
 
       - name: Lint chart
