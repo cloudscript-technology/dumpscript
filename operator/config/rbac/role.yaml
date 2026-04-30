@@ -1,0 +1,55 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - batch
+  resources:
+  - cronjobs
+  - jobs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - dumpscript.cloudscript.com.br
+  resources:
+  - backupschedules
+  - restores
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - dumpscript.cloudscript.com.br
+  resources:
+  - backupschedules/finalizers
+  - restores/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - dumpscript.cloudscript.com.br
+  resources:
+  - backupschedules/status
+  - restores/status
+  verbs:
+  - get
+  - patch
+  - update

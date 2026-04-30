@@ -1,0 +1,43 @@
+# MySQL → MinIO (S3-compatible) with static keys.
+#
+# Required Secrets:
+#   mysql-creds       keys: username, password
+#   minio-creds       keys: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+#   discord-webhook   keys: url
+---
+apiVersion: dumpscript.cloudscript.com.br/v1alpha1
+kind: BackupSchedule
+metadata:
+  name: mysql-prod-daily
+  namespace: backups
+spec:
+  schedule: "0 3 * * *"
+  periodicity: daily
+  retentionDays: 14
+
+  database:
+    type: mysql
+    host: mysql.prod.svc
+    name: app
+    credentialsSecretRef:
+      name: mysql-creds
+    options: "--single-transaction --routines --triggers --events"
+
+  storage:
+    backend: s3
+    s3:
+      bucket: mysql-backups
+      prefix: mysql
+      region: us-east-1
+      endpointURL: http://minio.minio.svc:9000
+      credentialsSecretRef:
+        name: minio-creds
+        # Default keys: AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY.
+
+  notifications:
+    notifySuccess: false
+    discord:
+      webhookSecretRef:
+        name: discord-webhook
+        key: url
+      username: DumpScript Bot

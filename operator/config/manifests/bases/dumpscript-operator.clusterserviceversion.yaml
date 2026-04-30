@@ -1,0 +1,134 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: ClusterServiceVersion
+metadata:
+  annotations:
+    alm-examples: '[]'
+    capabilities: Seamless Upgrades
+    categories: Database
+    containerImage: ghcr.io/cloudscript-technology/dumpscript-operator:v0.0.1
+    description: |-
+      The dumpscript-operator drives scheduled database backups via the
+      BackupSchedule CRD and on-demand restores via the Restore CRD.
+    repository: https://github.com/cloudscript-technology/dumpscript
+    support: Cloudscript Technology
+  name: dumpscript-operator.v0.0.0
+  namespace: placeholder
+spec:
+  apiservicedefinitions: {}
+  customresourcedefinitions:
+    owned:
+    - description: BackupSchedule is the Schema for the backupschedules API.
+      displayName: Backup Schedule
+      kind: BackupSchedule
+      name: backupschedules.dumpscript.cloudscript.com.br
+      version: v1alpha1
+    - description: Restore is the Schema for the restores API.
+      displayName: Restore
+      kind: Restore
+      name: restores.dumpscript.cloudscript.com.br
+      version: v1alpha1
+  description: |
+    # Dumpscript Operator
+
+    Schedule-driven database backups and on-demand restores for Kubernetes.
+
+    ## Features
+
+    - **Engines**: PostgreSQL, MySQL, MariaDB, MongoDB, Redis, etcd, SQL Server,
+      and more — extensible via a Dumper interface.
+    - **Storage backends**: S3 (incl. MinIO/LocalStack/Wasabi via `endpointURL`),
+      Google Cloud Storage, Azure Blob (incl. Azurite emulator).
+    - **Encryption**: client-side AES-256-GCM with key from a Secret.
+    - **Compression**: gzip (default) or zstd; auto-detected on restore by extension.
+    - **Distributed lock** with grace-period stale takeover so a crashed run
+      does not jam every future scheduled execution.
+    - **IRSA / Workload Identity** support — no static keys required on EKS/GKE.
+    - **Retention**: per-schedule keep-last-N; per-day, per-week, per-month buckets.
+    - **Notifications**: stdout (default), with hooks for Slack/webhook (roadmap).
+    - **Prometheus metrics** for backup duration, size, success/failure counters.
+    - **Conditions + Events** on every reconcile transition for observability.
+
+    ## Quick start
+
+    Apply a `BackupSchedule` after install:
+
+    ```yaml
+    apiVersion: dumpscript.cloudscript.com.br/v1alpha1
+    kind: BackupSchedule
+    metadata: { name: postgres-daily, namespace: default }
+    spec:
+      schedule: "0 3 * * *"
+      periodicity: daily
+      image: ghcr.io/cloudscript-technology/dumpscript:latest
+      database:
+        type: postgresql
+        host: postgres.default.svc.cluster.local
+        name: appdb
+        credentialsSecretRef: { name: postgres-credentials }
+      storage:
+        backend: s3
+        s3:
+          bucket: my-backups
+          region: us-east-1
+          credentialsSecretRef: { name: aws-credentials }
+    ```
+
+    Trigger an ad-hoc backup by creating a Job from the generated CronJob:
+
+    ```sh
+    kubectl create job manual-run --from=cronjob/postgres-daily
+    ```
+
+    Restore by applying a `Restore` CR pointing at a backup key:
+
+    ```yaml
+    apiVersion: dumpscript.cloudscript.com.br/v1alpha1
+    kind: Restore
+    metadata: { name: rollback, namespace: default }
+    spec:
+      sourceKey: my-backups/daily/2026/04/29/dump_20260429_030000.sql.gz
+      image: ghcr.io/cloudscript-technology/dumpscript:latest
+      database: # same shape as BackupSchedule
+        ...
+      storage:
+        ...
+    ```
+  displayName: Dumpscript Operator
+  install:
+    spec:
+      deployments: []
+    strategy: deployment
+  installModes:
+  - supported: true
+    type: AllNamespaces
+  - supported: false
+    type: OwnNamespace
+  - supported: false
+    type: SingleNamespace
+  - supported: false
+    type: MultiNamespace
+  keywords:
+  - backup
+  - database
+  - postgres
+  - mysql
+  - mongodb
+  - redis
+  - etcd
+  - s3
+  - gcs
+  - azure
+  links:
+  - name: Source
+    url: https://github.com/cloudscript-technology/dumpscript
+  - name: Issues
+    url: https://github.com/cloudscript-technology/dumpscript/issues
+  maintainers:
+  - email: contact@cloudscript.com.br
+    name: Cloudscript Technology
+  maturity: alpha
+  minKubeVersion: 1.27.0
+  provider:
+    name: Cloudscript Technology
+    url: https://github.com/cloudscript-technology
+  version: 0.0.0

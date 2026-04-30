@@ -1,0 +1,35 @@
+# Schedule paused — does not fire dumps but preserves the CR + history.
+#
+# To resume:
+#   kubectl patch backupschedule pg-staging-paused -n backups \
+#     --type=merge -p '{"spec":{"suspend":false}}'
+#
+# Required Secrets:
+#   pg-staging-creds    keys: username, password
+---
+apiVersion: dumpscript.cloudscript.com.br/v1alpha1
+kind: BackupSchedule
+metadata:
+  name: pg-staging-paused
+  namespace: backups
+spec:
+  schedule: "0 4 * * *"
+  periodicity: daily
+  retentionDays: 7
+
+  suspend: true             # <— pauses execution
+
+  database:
+    type: postgresql
+    host: pg.staging.svc
+    name: app
+    credentialsSecretRef:
+      name: pg-staging-creds
+
+  storage:
+    backend: s3
+    s3:
+      bucket: staging-backups
+      prefix: pg
+      region: us-east-1
+      roleARN: arn:aws:iam::123456789012:role/dumpscript-backup

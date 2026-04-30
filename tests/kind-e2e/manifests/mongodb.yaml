@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongodb
+  labels:
+    app: mongodb
+spec:
+  # mongo:7 is ~700MB; on cold caches the image pull alone can exceed
+  # the default 600s progressDeadline. Bump to 30min so kubectl rollout
+  # status (with a matching --timeout) has a real chance to succeed.
+  progressDeadlineSeconds: 1800
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mongodb
+  template:
+    metadata:
+      labels:
+        app: mongodb
+    spec:
+      containers:
+        - name: mongodb
+          image: mirror.gcr.io/library/mongo:7
+          env:
+            - name: MONGO_INITDB_ROOT_USERNAME
+              value: testuser
+            - name: MONGO_INITDB_ROOT_PASSWORD
+              value: testpassword
+          ports:
+            - name: mongodb
+              containerPort: 27017
+          readinessProbe:
+            exec:
+              command:
+                - mongosh
+                - --quiet
+                - --username
+                - testuser
+                - --password
+                - testpassword
+                - --authenticationDatabase
+                - admin
+                - --eval
+                - "db.adminCommand('ping').ok"
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 30
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb
+  labels:
+    app: mongodb
+spec:
+  selector:
+    app: mongodb
+  ports:
+    - name: mongodb
+      port: 27017
+      targetPort: 27017
+  type: ClusterIP

@@ -1,0 +1,5 @@
+# operator-sdk build artefacts
+/bin/
+/dist/
+*.test
+*.out

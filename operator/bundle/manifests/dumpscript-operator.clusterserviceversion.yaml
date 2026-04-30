@@ -1,0 +1,359 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: ClusterServiceVersion
+metadata:
+  annotations:
+    alm-examples: |-
+      [
+        {
+          "apiVersion": "dumpscript.cloudscript.com.br/v1alpha1",
+          "kind": "BackupSchedule",
+          "metadata": {
+            "labels": {
+              "app.kubernetes.io/managed-by": "kustomize",
+              "app.kubernetes.io/name": "dumpscript-operator"
+            },
+            "name": "backupschedule-sample"
+          },
+          "spec": {
+            "database": {
+              "credentialsSecretRef": {
+                "name": "postgres-creds"
+              },
+              "host": "postgres.default.svc",
+              "name": "app",
+              "type": "postgresql"
+            },
+            "periodicity": "daily",
+            "retentionDays": 7,
+            "schedule": "0 2 * * *",
+            "storage": {
+              "backend": "s3",
+              "s3": {
+                "bucket": "my-backups",
+                "prefix": "pg",
+                "region": "us-east-1"
+              }
+            }
+          }
+        },
+        {
+          "apiVersion": "dumpscript.cloudscript.com.br/v1alpha1",
+          "kind": "Restore",
+          "metadata": {
+            "labels": {
+              "app.kubernetes.io/managed-by": "kustomize",
+              "app.kubernetes.io/name": "dumpscript-operator"
+            },
+            "name": "restore-sample"
+          },
+          "spec": {
+            "createDB": true,
+            "database": {
+              "credentialsSecretRef": {
+                "name": "postgres-creds"
+              },
+              "host": "postgres.default.svc",
+              "name": "app",
+              "type": "postgresql"
+            },
+            "sourceKey": "pg/daily/YYYY/MM/DD/dump_YYYYMMDD_HHMMSS.sql.gz",
+            "storage": {
+              "backend": "s3",
+              "s3": {
+                "bucket": "my-backups",
+                "prefix": "pg",
+                "region": "us-east-1"
+              }
+            }
+          }
+        }
+      ]
+    capabilities: Seamless Upgrades
+    categories: Database
+    containerImage: ghcr.io/cloudscript-technology/dumpscript-operator:v0.0.1
+    createdAt: "2026-04-29T20:32:45Z"
+    description: |-
+      The dumpscript-operator drives scheduled database backups via the
+      BackupSchedule CRD and on-demand restores via the Restore CRD.
+    operators.operatorframework.io/builder: operator-sdk-v1.42.0
+    operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
+    repository: https://github.com/cloudscript-technology/dumpscript
+    support: Cloudscript Technology
+  name: dumpscript-operator.v0.0.1
+  namespace: placeholder
+spec:
+  apiservicedefinitions: {}
+  customresourcedefinitions:
+    owned:
+    - description: BackupSchedule is the Schema for the backupschedules API.
+      displayName: Backup Schedule
+      kind: BackupSchedule
+      name: backupschedules.dumpscript.cloudscript.com.br
+      version: v1alpha1
+    - description: Restore is the Schema for the restores API.
+      displayName: Restore
+      kind: Restore
+      name: restores.dumpscript.cloudscript.com.br
+      version: v1alpha1
+  description: |
+    # Dumpscript Operator
+
+    Schedule-driven database backups and on-demand restores for Kubernetes.
+
+    ## Features
+
+    - **Engines**: PostgreSQL, MySQL, MariaDB, MongoDB, Redis, etcd, SQL Server,
+      and more — extensible via a Dumper interface.
+    - **Storage backends**: S3 (incl. MinIO/LocalStack/Wasabi via `endpointURL`),
+      Google Cloud Storage, Azure Blob (incl. Azurite emulator).
+    - **Encryption**: client-side AES-256-GCM with key from a Secret.
+    - **Compression**: gzip (default) or zstd; auto-detected on restore by extension.
+    - **Distributed lock** with grace-period stale takeover so a crashed run
+      does not jam every future scheduled execution.
+    - **IRSA / Workload Identity** support — no static keys required on EKS/GKE.
+    - **Retention**: per-schedule keep-last-N; per-day, per-week, per-month buckets.
+    - **Notifications**: stdout (default), with hooks for Slack/webhook (roadmap).
+    - **Prometheus metrics** for backup duration, size, success/failure counters.
+    - **Conditions + Events** on every reconcile transition for observability.
+
+    ## Quick start
+
+    Apply a `BackupSchedule` after install:
+
+    ```yaml
+    apiVersion: dumpscript.cloudscript.com.br/v1alpha1
+    kind: BackupSchedule
+    metadata: { name: postgres-daily, namespace: default }
+    spec:
+      schedule: "0 3 * * *"
+      periodicity: daily
+      image: ghcr.io/cloudscript-technology/dumpscript:latest
+      database:
+        type: postgresql
+        host: postgres.default.svc.cluster.local
+        name: appdb
+        credentialsSecretRef: { name: postgres-credentials }
+      storage:
+        backend: s3
+        s3:
+          bucket: my-backups
+          region: us-east-1
+          credentialsSecretRef: { name: aws-credentials }
+    ```
+
+    Trigger an ad-hoc backup by creating a Job from the generated CronJob:
+
+    ```sh
+    kubectl create job manual-run --from=cronjob/postgres-daily
+    ```
+
+    Restore by applying a `Restore` CR pointing at a backup key:
+
+    ```yaml
+    apiVersion: dumpscript.cloudscript.com.br/v1alpha1
+    kind: Restore
+    metadata: { name: rollback, namespace: default }
+    spec:
+      sourceKey: my-backups/daily/2026/04/29/dump_20260429_030000.sql.gz
+      image: ghcr.io/cloudscript-technology/dumpscript:latest
+      database: # same shape as BackupSchedule
+        ...
+      storage:
+        ...
+    ```
+  displayName: Dumpscript Operator
+  install:
+    spec:
+      clusterPermissions:
+      - rules:
+        - apiGroups:
+          - ""
+          resources:
+          - events
+          verbs:
+          - create
+          - patch
+        - apiGroups:
+          - batch
+          resources:
+          - cronjobs
+          - jobs
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - dumpscript.cloudscript.com.br
+          resources:
+          - backupschedules
+          - restores
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - dumpscript.cloudscript.com.br
+          resources:
+          - backupschedules/finalizers
+          - restores/finalizers
+          verbs:
+          - update
+        - apiGroups:
+          - dumpscript.cloudscript.com.br
+          resources:
+          - backupschedules/status
+          - restores/status
+          verbs:
+          - get
+          - patch
+          - update
+        - apiGroups:
+          - authentication.k8s.io
+          resources:
+          - tokenreviews
+          verbs:
+          - create
+        - apiGroups:
+          - authorization.k8s.io
+          resources:
+          - subjectaccessreviews
+          verbs:
+          - create
+        serviceAccountName: dumpscript-operator-controller-manager
+      deployments:
+      - label:
+          app.kubernetes.io/managed-by: kustomize
+          app.kubernetes.io/name: dumpscript-operator
+          control-plane: controller-manager
+        name: dumpscript-operator-controller-manager
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app.kubernetes.io/name: dumpscript-operator
+              control-plane: controller-manager
+          strategy: {}
+          template:
+            metadata:
+              annotations:
+                kubectl.kubernetes.io/default-container: manager
+              labels:
+                app.kubernetes.io/name: dumpscript-operator
+                control-plane: controller-manager
+            spec:
+              containers:
+              - args:
+                - --metrics-bind-address=:8443
+                - --leader-elect
+                - --health-probe-bind-address=:8081
+                command:
+                - /manager
+                image: ghcr.io/cloudscript-technology/dumpscript-operator:v0.0.1
+                livenessProbe:
+                  httpGet:
+                    path: /healthz
+                    port: 8081
+                  initialDelaySeconds: 15
+                  periodSeconds: 20
+                name: manager
+                readinessProbe:
+                  httpGet:
+                    path: /readyz
+                    port: 8081
+                  initialDelaySeconds: 5
+                  periodSeconds: 10
+                resources:
+                  limits:
+                    cpu: 500m
+                    memory: 128Mi
+                  requests:
+                    cpu: 10m
+                    memory: 64Mi
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  capabilities:
+                    drop:
+                    - ALL
+              securityContext:
+                runAsNonRoot: true
+                seccompProfile:
+                  type: RuntimeDefault
+              serviceAccountName: dumpscript-operator-controller-manager
+              terminationGracePeriodSeconds: 10
+      permissions:
+      - rules:
+        - apiGroups:
+          - ""
+          resources:
+          - configmaps
+          verbs:
+          - get
+          - list
+          - watch
+          - create
+          - update
+          - patch
+          - delete
+        - apiGroups:
+          - coordination.k8s.io
+          resources:
+          - leases
+          verbs:
+          - get
+          - list
+          - watch
+          - create
+          - update
+          - patch
+          - delete
+        - apiGroups:
+          - ""
+          resources:
+          - events
+          verbs:
+          - create
+          - patch
+        serviceAccountName: dumpscript-operator-controller-manager
+    strategy: deployment
+  installModes:
+  - supported: true
+    type: AllNamespaces
+  - supported: false
+    type: OwnNamespace
+  - supported: false
+    type: SingleNamespace
+  - supported: false
+    type: MultiNamespace
+  keywords:
+  - backup
+  - database
+  - postgres
+  - mysql
+  - mongodb
+  - redis
+  - etcd
+  - s3
+  - gcs
+  - azure
+  links:
+  - name: Source
+    url: https://github.com/cloudscript-technology/dumpscript
+  - name: Issues
+    url: https://github.com/cloudscript-technology/dumpscript/issues
+  maintainers:
+  - email: contact@cloudscript.com.br
+    name: Cloudscript Technology
+  maturity: alpha
+  minKubeVersion: 1.27.0
+  provider:
+    name: Cloudscript Technology
+    url: https://github.com/cloudscript-technology
+  version: 0.0.1

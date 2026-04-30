@@ -1,0 +1,45 @@
+# PostgreSQL → AWS S3 via IRSA (no static AWS keys in the cluster).
+#
+# Required Secrets in namespace `backups`:
+#   pg-prod-creds    keys: username, password
+#   slack-webhook    keys: url
+#
+# The KSA `dumpscript-pg` must carry an `eks.amazonaws.com/role-arn`
+# annotation pointing at an IAM role with PutObject/ListBucket on the
+# bucket prefix below.
+---
+apiVersion: dumpscript.cloudscript.com.br/v1alpha1
+kind: BackupSchedule
+metadata:
+  name: pg-prod-daily
+  namespace: backups
+spec:
+  schedule: "0 2 * * *"
+  periodicity: daily
+  retentionDays: 30
+
+  serviceAccountName: dumpscript-pg
+
+  database:
+    type: postgresql
+    host: pg.prod.svc
+    name: app
+    credentialsSecretRef:
+      name: pg-prod-creds
+    options: "--no-owner --no-acl --single-transaction"
+
+  storage:
+    backend: s3
+    s3:
+      bucket: prod-backups
+      prefix: pg
+      region: us-east-1
+      roleARN: arn:aws:iam::123456789012:role/dumpscript-backup
+
+  notifications:
+    notifySuccess: true
+    slack:
+      webhookSecretRef:
+        name: slack-webhook
+        key: url
+      channel: "#database-alerts"

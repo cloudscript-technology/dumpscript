@@ -1,0 +1,48 @@
+apiVersion: v2
+name: dumpscript-operator
+description: |
+  Kubernetes operator that drives scheduled database backups via the
+  BackupSchedule CRD and on-demand restores via the Restore CRD. Supports
+  PostgreSQL, MySQL, MariaDB, MongoDB, Redis, etcd, SQL Server (and more)
+  with S3, GCS, and Azure Blob storage backends.
+type: application
+# Charted version is independent of the operator binary version. Bump on
+# any chart change (template, values schema, default image tag).
+version: 0.1.0
+appVersion: "0.0.1"
+kubeVersion: ">=1.27.0-0"
+home: https://github.com/cloudscript-technology/dumpscript
+sources:
+  - https://github.com/cloudscript-technology/dumpscript
+keywords:
+  - backup
+  - database
+  - postgres
+  - mysql
+  - mongodb
+  - redis
+  - etcd
+  - s3
+  - gcs
+  - azure
+maintainers:
+  - name: Cloudscript Technology
+    url: https://github.com/cloudscript-technology
+annotations:
+  # Surface the major capabilities in chart metadata so registry/repo UIs
+  # (Artifact Hub, OperatorHub) can index without parsing values.yaml.
+  artifacthub.io/category: integration-and-delivery
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/operator: "true"
+  artifacthub.io/operatorCapabilities: Seamless Upgrades
+  artifacthub.io/crds: |
+    - kind: BackupSchedule
+      version: v1alpha1
+      name: backupschedules.dumpscript.cloudscript.com.br
+      displayName: Backup Schedule
+      description: Cron-driven scheduled database backup
+    - kind: Restore
+      version: v1alpha1
+      name: restores.dumpscript.cloudscript.com.br
+      displayName: Restore
+      description: One-shot database restore from a backup key

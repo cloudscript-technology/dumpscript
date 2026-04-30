@@ -1,0 +1,37 @@
+# SQLite — file-based engine accessing a shared PVC.
+#
+# IMPORTANT — the operator does not yet template volumes onto the generated
+# CronJob. Patch the CronJob via your kustomize/Helm overlay to add a
+# `volumes:` entry referencing the PVC and a `volumeMounts:` entry on the
+# `dumpscript` container at /data. Tracked as a follow-up on the operator.
+#
+# Required:
+#   PVC `app-data` in namespace `backups`, ReadWriteMany or ReadOnlyMany
+#   so the backup pod can mount it alongside the application.
+---
+apiVersion: dumpscript.cloudscript.com.br/v1alpha1
+kind: BackupSchedule
+metadata:
+  name: sqlite-app-daily
+  namespace: backups
+spec:
+  schedule: "0 3 * * *"
+  periodicity: daily
+  retentionDays: 30
+
+  database:
+    type: sqlite
+    # No host/port/user — sqlite is file-based.
+    name: /data/app.sqlite        # absolute path inside the pod
+
+  storage:
+    backend: s3
+    s3:
+      bucket: prod-backups
+      prefix: sqlite
+      region: us-east-1
+      roleARN: arn:aws:iam::123456789012:role/dumpscript-backup
+
+  notifications:
+    notifySuccess: true
+    stdout: true

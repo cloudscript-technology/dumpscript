@@ -1,0 +1,96 @@
+## Operator image. Override `repository` + `tag` to pin a release; `digest`
+## takes precedence over `tag` when set (preferred for production).
+##
+## NOTE: the default repository points at the org publishing the chart, but
+## the same chart can be hosted under multiple GHCR namespaces (upstream +
+## forks). Always pass `--set image.repository=ghcr.io/<owner>/dumpscript-operator`
+## when installing from a fork, otherwise the pull will 403 because the image
+## was pushed to the fork's namespace, not cloudscript-technology's.
+image:
+  repository: ghcr.io/cloudscript-technology/dumpscript-operator
+  tag: ""              # defaults to .Chart.appVersion when empty
+  digest: ""           # e.g. sha256:abcd...; overrides tag if set
+  pullPolicy: IfNotPresent
+imagePullSecrets: []   # list of {name: regcred}
+
+## Replica count. Use >=2 with leaderElection (default on) for HA.
+replicaCount: 1
+
+## Pod-level security. Defaults match Kubernetes "restricted" PSS.
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+  readOnlyRootFilesystem: true
+
+## Resource requests/limits. Tune for your workload — operator is mostly
+## idle (watch loops) so requests can be small. Limits guard against
+## controller-runtime cache bloat under load.
+resources:
+  limits:
+    cpu: 500m
+    memory: 128Mi
+  requests:
+    cpu: 10m
+    memory: 64Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+priorityClassName: ""
+
+podLabels: {}
+podAnnotations: {}
+
+## ServiceAccount. Set `name` to reuse an existing SA (then `create=false`).
+## Annotations are commonly used for IRSA (AWS) / Workload Identity (GCP).
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+## Leader election lets >=2 replicas coordinate; only one is active.
+leaderElect: true
+
+## Metrics — operator exposes Prometheus-format metrics on :8443 (HTTPS,
+## auth-protected by default in operator-sdk scaffolding).
+metrics:
+  enabled: true
+  service:
+    type: ClusterIP
+    port: 8443
+
+## ServiceMonitor for prometheus-operator. Requires
+## monitoring.coreos.com/v1 CRDs in-cluster (kube-prometheus-stack).
+serviceMonitor:
+  enabled: false
+  namespace: ""             # defaults to release namespace
+  labels: {}
+  interval: 30s
+  scrapeTimeout: 10s
+
+## CRD installation. By default, CRDs in `crds/` are installed by Helm on
+## first install (and are NEVER removed by Helm on uninstall — that is
+## intentional, to avoid wiping user-created resources). Set `install=false`
+## to manage CRDs out-of-band (e.g. via ArgoCD, gitops, or operator-sdk).
+crds:
+  install: true
+
+## Webhook configuration is reserved for a future release; OLM handles
+## webhook certs separately. Left here so values are forward-compatible.
+webhook:
+  enabled: false
+
+## Health probes — match operator-sdk defaults; tweak for slow clusters.
+probes:
+  liveness:
+    initialDelaySeconds: 15
+    periodSeconds: 20
+  readiness:
+    initialDelaySeconds: 5
+    periodSeconds: 10

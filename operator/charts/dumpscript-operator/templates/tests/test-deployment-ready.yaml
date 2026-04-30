@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "dumpscript-operator.fullname" . }}-test-ready
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dumpscript-operator.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  containers:
+    - name: kubectl
+      # Pinned alpine kubectl image (rancher/kubectl is multi-arch and small).
+      image: rancher/kubectl:v1.30.0
+      command:
+        - sh
+        - -c
+        - |
+          kubectl rollout status deploy/{{ include "dumpscript-operator.fullname" . }} \
+            -n {{ .Release.Namespace }} --timeout=120s
+  serviceAccountName: {{ include "dumpscript-operator.serviceAccountName" . }}

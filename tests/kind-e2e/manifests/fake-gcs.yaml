@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fake-gcs
+  labels:
+    app: fake-gcs
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fake-gcs
+  template:
+    metadata:
+      labels:
+        app: fake-gcs
+    spec:
+      containers:
+        - name: fake-gcs
+          image: mirror.gcr.io/fsouza/fake-gcs-server:1.49.0
+          # public-host must match the in-cluster Service DNS so that signed URLs
+          # and download redirects resolve correctly from the dumpscript pod.
+          args:
+            - "-scheme"
+            - "http"
+            - "-port"
+            - "4443"
+            - "-public-host"
+            - "fake-gcs.dumpscript-e2e.svc.cluster.local:4443"
+          ports:
+            - name: http
+              containerPort: 4443
+          readinessProbe:
+            httpGet:
+              path: /storage/v1/b
+              port: 4443
+            initialDelaySeconds: 3
+            periodSeconds: 3
+            failureThreshold: 30
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fake-gcs
+  labels:
+    app: fake-gcs
+spec:
+  selector:
+    app: fake-gcs
+  ports:
+    - name: http
+      port: 4443
+      targetPort: 4443
+  type: ClusterIP

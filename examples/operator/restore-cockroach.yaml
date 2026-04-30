@@ -1,0 +1,40 @@
+# CockroachDB restore via psql. CRDB does NOT support CREATE DATABASE
+# during replay — the target database must pre-exist. Create it once with:
+#   cockroach sql --insecure --host=crdb.staging.svc:26257 \
+#     -e "CREATE DATABASE appdb;"
+#
+# Required Secrets:
+#   crdb-staging-creds    keys: username (=root), password (empty allowed)
+#   slack-webhook         keys: url
+---
+apiVersion: dumpscript.cloudscript.com.br/v1alpha1
+kind: Restore
+metadata:
+  name: crdb-staging-restore-from-prod
+  namespace: backups
+spec:
+  sourceKey: crdb/daily/YYYY/MM/DD/dump_YYYYMMDD_HHMMSS.sql.gz
+  createDB: false                # CRDB requires the DB to pre-exist
+  ttlSecondsAfterFinished: 3600
+
+  database:
+    type: cockroach
+    host: crdb.staging.svc
+    port: 26257
+    name: appdb
+    credentialsSecretRef:
+      name: crdb-staging-creds
+
+  storage:
+    backend: s3
+    s3:
+      bucket: prod-backups
+      prefix: crdb
+      region: us-east-1
+      roleARN: arn:aws:iam::123456789012:role/dumpscript-backup
+
+  notifications:
+    notifySuccess: true
+    slack:
+      webhookSecretRef: { name: slack-webhook, key: url }
+      channel: "#database-alerts"

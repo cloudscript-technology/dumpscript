@@ -1,0 +1,38 @@
+# CockroachDB on an --insecure cluster (no TLS, empty password).
+# The Cockroach engine uses psql + SHOW CREATE TABLE, so pg_dump quirks
+# against CRDB are bypassed.
+#
+# Required Secrets:
+#   crdb-creds       keys: username (=root), password (empty string allowed)
+#   slack-webhook    keys: url
+---
+apiVersion: dumpscript.cloudscript.com.br/v1alpha1
+kind: BackupSchedule
+metadata:
+  name: crdb-prod-daily
+  namespace: backups
+spec:
+  schedule: "0 6 * * *"
+  periodicity: daily
+  retentionDays: 30
+
+  database:
+    type: cockroach
+    host: crdb.prod.svc
+    port: 26257
+    name: appdb            # required for cockroach (no all-databases mode)
+    credentialsSecretRef:
+      name: crdb-creds
+
+  storage:
+    backend: s3
+    s3:
+      bucket: prod-backups
+      prefix: crdb
+      region: us-east-1
+      roleARN: arn:aws:iam::123456789012:role/dumpscript-backup
+
+  notifications:
+    notifySuccess: true
+    slack:
+      webhookSecretRef: { name: slack-webhook, key: url }

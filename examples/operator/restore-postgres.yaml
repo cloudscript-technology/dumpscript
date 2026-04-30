@@ -1,0 +1,41 @@
+# One-shot Postgres restore — downloads a specific dump and applies it.
+# Re-applying the same CR is idempotent; to restore the same dump again,
+# use a different `metadata.name`.
+#
+# Required Secrets:
+#   pg-staging-creds    keys: username, password
+#                       (must hold CREATE DATABASE if `createDB: true`)
+#   slack-webhook       keys: url
+---
+apiVersion: dumpscript.cloudscript.com.br/v1alpha1
+kind: Restore
+metadata:
+  name: pg-staging-restore-from-prod
+  namespace: backups
+spec:
+  sourceKey: pg/daily/YYYY/MM/DD/dump_YYYYMMDD_HHMMSS.sql.gz
+  createDB: true
+  ttlSecondsAfterFinished: 3600
+
+  serviceAccountName: dumpscript-pg
+
+  database:
+    type: postgresql
+    host: pg.staging.svc
+    name: app
+    credentialsSecretRef:
+      name: pg-staging-creds
+
+  storage:
+    backend: s3
+    s3:
+      bucket: prod-backups
+      prefix: pg
+      region: us-east-1
+      roleARN: arn:aws:iam::123456789012:role/dumpscript-backup
+
+  notifications:
+    notifySuccess: true
+    slack:
+      webhookSecretRef: { name: slack-webhook, key: url }
+      channel: "#database-alerts"

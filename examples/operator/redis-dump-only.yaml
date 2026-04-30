@@ -1,0 +1,39 @@
+# Redis snapshot (RDB) → S3. Restore is intentionally unsupported by
+# dumpscript (RDB requires stopping redis-server and replacing dump.rdb).
+#
+# Required Secrets:
+#   slack-webhook    keys: url
+#   (optional)
+#   redis-auth       keys: password   — only when Redis enforces ACL/requirepass
+---
+apiVersion: dumpscript.cloudscript.com.br/v1alpha1
+kind: BackupSchedule
+metadata:
+  name: redis-cache-daily
+  namespace: backups
+spec:
+  schedule: "0 7 * * *"
+  periodicity: daily
+  retentionDays: 7
+
+  database:
+    type: redis
+    host: redis.prod.svc
+    port: 6379
+    # Uncomment for ACL/requirepass-protected instances:
+    # credentials:
+    #   name: redis-auth
+    #   passwordKey: password
+
+  storage:
+    backend: s3
+    s3:
+      bucket: prod-backups
+      prefix: redis
+      region: us-east-1
+      roleARN: arn:aws:iam::123456789012:role/dumpscript-backup
+
+  notifications:
+    notifySuccess: false
+    slack:
+      webhookSecretRef: { name: slack-webhook, key: url }

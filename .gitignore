@@ -1,3 +1,38 @@
+# --- dumpscript (Go project) ---
+
+# Build outputs
+/bin/
+/dist/
+/out/
+
+# Test + coverage artefacts
+coverage.out
+coverage.html
+*.test
+*.prof
+
+# Go tooling
+vendor/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
 .cursorignore
-web
+
+# macOS / OS
+.DS_Store
+Thumbs.db
+
+# Local env / secrets
 **/.env
+*.local.env
+*.secrets.yaml
+.envrc
+
+# Legacy bash-era scratch dirs
+web
+
+# Podman / Docker volumes created during e2e
+.testcontainers-*
