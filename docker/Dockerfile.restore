@@ -5,8 +5,8 @@ WORKDIR /dumpscript
 
 RUN addgroup -S cloudscript && adduser -S dumpscript -G cloudscript
 
-# Install base dependencies and necessary tools
-RUN apk add --no-cache \
+# Security updates for the base image (edge is pinned by digest, so fixes land here) + base tools
+RUN apk upgrade --no-cache && apk add --no-cache \
     aws-cli \
     rclone \
     jq \
