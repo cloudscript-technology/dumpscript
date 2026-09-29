@@ -78,11 +78,11 @@ if ! storage_list "${BACKUP_PATH}" >"$TMP_LIST" 2>"$TMP_ERR"; then
 fi
 
 while read -r line; do
-    # storage_list output format: "DATE  SIZE  PATH"
-    file_path=$(echo "$line" | awk '{print $3}')
+    # storage_list output format: "YYYY-MM-DD HH:MM:SS  SIZE  PATH" (date and time are two fields)
+    file_path=$(echo "$line" | awk '{print $NF}')
     [ -z "$file_path" ] && continue
-    # Only process files ending with .sql.gz or .archive.gz
-    if [[ ! "$file_path" =~ \.(sql|archive)(\.gz)?$ ]]; then
+    # Only process backup objects: .sql(.gz), .archive(.gz) or ClickHouse tar archives (.tar, .tar.gz, .tar.zst)
+    if [[ ! "$file_path" =~ \.(sql|archive)(\.gz)?$ ]] && [[ ! "$file_path" =~ \.(tar|tar\.gz|tar\.zst|tgz|tzst)$ ]]; then
         echo "[DEBUG] Skipping non-backup entry: $file_path"
         continue
     fi

@@ -7,8 +7,9 @@ Testes de integração do dumpscript contra os providers de storage reais.
 ```
 tests/
 ├── gcs/      # Google Cloud Storage via S3-compatible API (HMAC)
-├── aws/      # AWS S3
-└── azure/    # Azure Blob Storage
+├── aws/        # AWS S3
+├── azure/      # Azure Blob Storage
+└── clickhouse/ # ClickHouse (backup nativo server-side) -> S3 local (RustFS), roda offline
 ```
 
 ## Como usar
@@ -21,6 +22,7 @@ Os comandos são executados a partir da **raiz do repositório**.
 cp tests/gcs/.env.example tests/gcs/.env
 cp tests/aws/.env.example tests/aws/.env
 cp tests/azure/.env.example tests/azure/.env
+cp tests/clickhouse/.env.example tests/clickhouse/.env   # não precisa de credencial
 ```
 
 ### 2. Execute o teste do provider desejado
@@ -29,6 +31,7 @@ cp tests/azure/.env.example tests/azure/.env
 npm run test:gcs
 npm run test:aws
 npm run test:azure
+npm run test:clickhouse
 ```
 
 ### 3. Limpe os containers após o teste (opcional)
@@ -37,6 +40,7 @@ npm run test:azure
 npm run test:gcs:down
 npm run test:aws:down
 npm run test:azure:down
+npm run test:clickhouse:down
 ```
 
 ---
@@ -70,3 +74,29 @@ Para temporary credentials (STS), defina também `AWS_SESSION_TOKEN` no `.env`.
 - Storage Account criada no Azure
 - Container criado previamente
 - Storage Account Key **ou** SAS Token com permissões `Read`, `Write`, `List`, `Delete`
+
+---
+
+## ClickHouse
+
+Sobe `clickhouse/clickhouse-server` (tag em `CLICKHOUSE_VERSION`, padrão 26.8.10.6) com dados de exemplo
+(`initdb/01-seed.sql`) e o usuário `backup` com os grants de produção (`initdb/02-backup-user.sh`),
+mais um S3 local (RustFS — as imagens do MinIO deixaram de ser públicas). O dumpscript dispara
+`BACKUP ... TO S3(...)` no servidor e faz o poll em `system.backups`. Nenhuma credencial real é necessária.
+
+**Cenários** (edite `tests/clickhouse/.env`):
+- `DB_NAME=demo` — um banco.
+- `DB_NAME=` — instância inteira (bancos + users/roles/grants/named collections).
+
+**Contra o GCS real**: descomente o bloco no fim do `.env` (endpoint `https://storage.googleapis.com`,
+HMAC key, bucket existente). O upload é feito pelo servidor ClickHouse, então este é o caminho de produção.
+
+**Validar o restore** (com o stack de pé, `docker compose ... up -d s3 clickhouse`):
+
+```bash
+docker compose -f tests/clickhouse/docker-compose.yml --env-file tests/clickhouse/.env exec clickhouse \
+  clickhouse-client --user admin --password admin --query \
+  "RESTORE DATABASE demo AS demo_restored FROM S3('http://s3:9000/dumpscript/clickhouse/demo/daily/<yyyy>/<mm>/<dd>/<arquivo>.tar.zst', 'minioadmin', 'minioadmin123')"
+```
+
+Compare `SELECT count(), sum(event_id) FROM demo.events` com `demo_restored.events`.

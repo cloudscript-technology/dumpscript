@@ -9,9 +9,10 @@ Database dump and restore tool with configurable client versions.
 
 ## Features
 
-- Support for PostgreSQL, MySQL/MariaDB and MongoDB databases
+- Support for PostgreSQL, MySQL/MariaDB, MongoDB and ClickHouse databases
 - **Multiple storage backends** - S3-compatible storage (AWS, MinIO) and Azure Blob Storage
 - **Runtime configurable database client versions** - No need to rebuild images
+- **ClickHouse native backups** - server-side `BACKUP ... TO S3()/AzureBlobStorage()` as a single archive, no local disk
 - **Multiple backup schedules** - Support for daily, weekly, monthly, and yearly backups per database
 - **Slack notifications** - Optional notifications for backup status
 - Automatic upload of database dumps to configured storage backend
@@ -68,6 +69,14 @@ Supported versions:
 MongoDB backups use `mongodump`/`mongorestore` from MongoDB Database Tools.
 Tools are installed at runtime (no version pinning).
 
+### ClickHouse
+ClickHouse backups do not use a client binary. DumpScript sends a native
+`BACKUP ... TO S3(...)` (or `AzureBlobStorage(...)`) statement to the server over the
+HTTP interface (`curl`, port `8123`/`8443`) and polls `system.backups` until it finishes.
+The **server** uploads the archive straight to the bucket: nothing is written to the job's
+disk, so no `/dumpscript` volume is needed. Requires ClickHouse **>= 24.3**.
+See [ClickHouse](#clickhouse-1) below for grants, network and restore.
+
 ## Usage
 
 ### Environment Variables
@@ -76,7 +85,7 @@ Tools are installed at runtime (no version pinning).
 
 | Variable | Description |
 |----------|-------------|
-| `DB_TYPE` | Database type (`postgresql`, `mysql`, `mariadb` or `mongodb`) |
+| `DB_TYPE` | Database type (`postgresql`, `mysql`, `mariadb`, `mongodb` or `clickhouse`) |
 | `DB_HOST` | Database host |
 | `DB_USER` | Database username |
 | `DB_PASSWORD` | Database password |
@@ -96,7 +105,7 @@ Tools are installed at runtime (no version pinning).
 | `AWS_REGION` | Yes | AWS region |
 | `S3_BUCKET` | Yes | S3 bucket name |
 | `S3_PREFIX` | Yes | S3 key prefix for dumps |
-| `AWS_ACCESS_KEY_ID` | Yes* | AWS access key (*or use IRSA) |
+| `AWS_ACCESS_KEY_ID` | Yes* | AWS access key (*or use IRSA; `clickhouse` needs a static key, see below) |
 | `AWS_SECRET_ACCESS_KEY` | Yes* | AWS secret key (*or use IRSA) |
 | `AWS_ROLE_ARN` | No | AWS IAM role ARN for IRSA authentication |
 | `AWS_S3_ENDPOINT_URL` | No | Custom S3 endpoint (for MinIO or S3-compatible storage) |
@@ -126,9 +135,22 @@ Tools are installed at runtime (no version pinning).
 | `POSTGRES_VERSION` | PostgreSQL client version (default: `16`) |
 | `MYSQL_VERSION` | MySQL client version (`5.7` or `8.0`) — dumps with `mysqldump` |
 | `MARIADB_VERSION` | MariaDB client version (default: `11.4`) — dumps with `mariadb-dump` |
-| `DB_PORT` | Database port (default: 5432 for PostgreSQL, 3306 for MySQL, 27017 for MongoDB) |
+| `DB_PORT` | Database port (default: 5432 for PostgreSQL, 3306 for MySQL, 27017 for MongoDB, 8123 for ClickHouse HTTP) |
 | `DB_NAME` | Database name (if omitted, dumps all databases in the instance) |
-| `DUMP_OPTIONS` | Additional options for the dump command (e.g., `--authenticationDatabase=admin`) |
+| `DUMP_OPTIONS` | Additional options for the dump command (e.g., `--authenticationDatabase=admin`). For `clickhouse` it is appended to the `BACKUP ... SETTINGS` clause (e.g. `allow_s3_native_copy=0, deduplicate_files=1`) |
+
+#### ClickHouse Options (optional, `DB_TYPE=clickhouse`)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CLICKHOUSE_SECURE` | `false` | Use `https://` for the HTTP interface (default port becomes `8443`) |
+| `CLICKHOUSE_CA_CERT` | — | CA bundle path for `https://` |
+| `CLICKHOUSE_ARCHIVE_FORMAT` | `tar.zst` | Archive written by the server: `tar`, `tar.gz` or `tar.zst` (`zip` is not supported for S3/Azure) |
+| `CLICKHOUSE_EXCLUDE_DATABASES` | `system,information_schema,INFORMATION_SCHEMA` | Databases skipped on a full-instance backup (`DB_NAME` empty) |
+| `CLICKHOUSE_BACKUP_ACCESS_ENTITIES` | `true` | Include users, roles, grants, quotas, settings profiles, row policies, functions and named collections on a full-instance backup |
+| `CLICKHOUSE_BACKUP_TIMEOUT` | `21600` | Seconds to wait for the server-side backup (6h) |
+| `CLICKHOUSE_BACKUP_POLL_INTERVAL` | `15` | Seconds between `system.backups` polls |
+| `CLICKHOUSE_USE_SERVER_CREDENTIALS` | `false` | Emit `S3('<url>')` without keys; the server authenticates with its own S3 configuration |
 
 ### Docker Examples
 
@@ -207,6 +229,24 @@ docker run --rm \
   -e AWS_REGION=us-east-1 \
   -e S3_BUCKET=my-backups \
   -e S3_PREFIX=mongodb-dumps \
+  -e PERIODICITY=daily \
+  -e RETENTION_DAYS=7 \
+  ghcr.io/cloudscript-technology/dumpscript:latest
+
+# ClickHouse daily backup to GCS (S3-compatible API, HMAC key) - runs on the server
+docker run --rm \
+  -e DB_TYPE=clickhouse \
+  -e DB_HOST=clickhouse.databases.svc.cluster.local \
+  -e DB_PORT=8123 \
+  -e DB_USER=backup \
+  -e DB_PASSWORD=password \
+  -e DB_NAME=analytics \
+  -e AWS_ACCESS_KEY_ID=GOOG1E... \
+  -e AWS_SECRET_ACCESS_KEY=... \
+  -e AWS_REGION=us-central1 \
+  -e AWS_S3_ENDPOINT_URL=https://storage.googleapis.com \
+  -e S3_BUCKET=my-backups \
+  -e S3_PREFIX=clickhouse/analytics \
   -e PERIODICITY=daily \
   -e RETENTION_DAYS=7 \
   ghcr.io/cloudscript-technology/dumpscript:latest
@@ -413,6 +453,41 @@ MongoDB backup notes:
 - For SCRAM auth, ensure `--authenticationDatabase` matches your setup (often `admin`).
 - Grant the backup user `read` on target DB; cluster-wide backups may require broader roles.
 
+#### ClickHouse Configuration
+
+```yaml
+databases:
+  - type: clickhouse
+    periodicity:
+      - type: daily
+        retentionDays: 15
+        schedule: "0 4 * * *"
+    connectionInfo:
+      # Secret keys: host, username, password, database, port
+      # database="" = full instance (databases + users/roles/grants/named collections)
+      secretName: dumpscript-clickhouse-credentials
+    objectStorage:
+      backend: s3
+      region: us-central1
+      bucket: my-db-backups
+      bucketPrefix: clickhouse/all
+      secretName: dumpscript-gcs-credentials   # accessKeyId / secretAccessKey (static or HMAC)
+      endpointUrl: https://storage.googleapis.com
+    # Optional BACKUP settings
+    extraArgs: "allow_s3_native_copy=0"
+    # Optional CLICKHOUSE_* variables (chart >= 1.9.0)
+    extraEnv:
+      - name: CLICKHOUSE_ARCHIVE_FORMAT
+        value: tar.zst
+    # No extraVolumes: the server uploads directly to the bucket
+```
+
+ClickHouse backup notes:
+- The backup runs **on the server**: it needs network egress to the storage endpoint and receives the storage credentials inside the `BACKUP` statement (masked in `system.backups`, `system.backup_log` and `query_log`).
+- Temporary AWS credentials (IRSA / `AWS_SESSION_TOKEN`) are **not** accepted by the S3 backup engine. Use a static key (or GCS HMAC key), or set `CLICKHOUSE_USE_SERVER_CREDENTIALS=true` and configure the credentials on the server.
+- The backup is taken on the replica behind `DB_HOST`. With `Replicated` databases / `ReplicatedMergeTree` the metadata snapshot is consistent (taken from Keeper) and the data is what that replica holds; `ON CLUSTER` is not used because archives are not supported with it.
+- Restore is manual for now: see [ClickHouse restore](#clickhouse-restore-manual).
+
 #### Advanced Configuration with Slack Notifications
 
 ```yaml
@@ -584,13 +659,13 @@ notifications:
 
 ## How It Works
 
-1. **Runtime Installation**: When the container starts, it reads the `POSTGRES_VERSION`, `MYSQL_VERSION` or `MARIADB_VERSION` environment variables
+1. **Runtime Installation**: When the container starts, it reads the `POSTGRES_VERSION`, `MYSQL_VERSION` or `MARIADB_VERSION` environment variables (`clickhouse` installs nothing: it only needs `curl`)
 2. **Dynamic Client Installation**: The appropriate database client is installed using Alpine's package manager
 3. **Version Verification**: The installation is verified and client version is logged
 4. **Database Operations**: The original dump/restore scripts are executed with the correct client version
 5. **Multiple Schedules**: Each database can have multiple backup schedules with different retention policies
-6. **Storage Upload**: The dump is uploaded to the configured storage backend using [rclone](https://rclone.org/), which handles multipart uploads, retries, and chunked transfers automatically
-7. **Path Structure**: Backups are stored at `<prefix>/<periodicity>/<year>/<month>/<day>/<dump_file>` (e.g., `daily/2025/03/24/dump_20250324_120000.sql.gz`)
+6. **Storage Upload**: The dump is uploaded to the configured storage backend using [rclone](https://rclone.org/), which handles multipart uploads, retries, and chunked transfers automatically. For `clickhouse` the **server** writes the archive to the bucket (`BACKUP ... TO S3()`/`AzureBlobStorage()` in `ASYNC` mode); the job polls `system.backups`, then confirms the object exists with rclone
+7. **Path Structure**: Backups are stored at `<prefix>/<periodicity>/<year>/<month>/<day>/<dump_file>` (e.g., `daily/2025/03/24/dump_20250324_120000.sql.gz`; ClickHouse: `dump_20250324_120000.tar.zst`)
 8. **Notifications**: Optional Slack notifications for backup status
 
 ## Storage Requirements
@@ -688,6 +763,7 @@ docker build -t dumpscript-restore:latest -f docker/Dockerfile.restore .
 - `docker/Dockerfile.restore` - Restore container image
 - `docker/scripts/dump_db_to_s3.sh` - Database dump script
 - `docker/scripts/restore_db_from_s3.sh` - Database restore script
+- `docker/scripts/clickhouse_backup.sh` - ClickHouse native (server-side) backup driver
 - `docker/scripts/storage_utils.sh` - Unified storage abstraction (S3 and Azure Blob Storage)
 - `docker/scripts/install_db_clients.sh` - Dynamic client installation script
 - `docker/scripts/entrypoint_dump.sh` - Dump container entrypoint
@@ -775,6 +851,7 @@ serviceAccount:
 - `MySQL/MariaDB`: use `--all-databases` with `mysqldump`/`mariadb-dump`.
 - `PostgreSQL`: use `pg_dumpall` for all databases, roles, and tablespaces.
 - `MongoDB`: omit `--db` in `mongodump` to dump the entire instance.
+- `ClickHouse`: `BACKUP TABLE system.users, system.roles, system.settings_profiles, system.row_policies, system.quotas, system.functions, system.named_collections, ALL EXCEPT DATABASES system, information_schema, INFORMATION_SCHEMA` (databases plus SQL-managed access entities). Tune with `CLICKHOUSE_EXCLUDE_DATABASES` / `CLICKHOUSE_BACKUP_ACCESS_ENTITIES`.
 
 Required privileges depend on the engine. Ensure the user can list and read all databases.
 
@@ -785,3 +862,36 @@ Required privileges depend on the engine. Ensure the user can list and read all 
 - `MongoDB`: omit `--db` in `mongorestore` to restore the entire instance.
 
 For full instance restores, `CREATE_DB` only has an effect when `DB_NAME` is defined.
+
+## ClickHouse
+
+### Grants for the backup user
+
+```sql
+CREATE USER backup IDENTIFIED WITH sha256_password BY '<password>';
+GRANT BACKUP, SHOW ON *.* TO backup;
+GRANT SELECT ON system.backups TO backup;      -- polling the ASYNC status
+GRANT READ, WRITE ON S3 TO backup;             -- destination S3()/GCS; ClickHouse < 25.7: GRANT S3 ON *.*
+-- Azure destination: GRANT AZURE ON *.* TO backup;
+```
+
+Also allow egress from the ClickHouse pods to the storage endpoint (NetworkPolicy / firewall) and, in Kubernetes, the DumpScript namespace to reach the ClickHouse HTTP port.
+
+### ClickHouse restore (manual)
+
+The restore image does not automate ClickHouse yet. Run the statement on the server (any replica) with a user that can create databases/tables and insert:
+
+```sql
+-- restore into the original name (target must be empty or absent)
+RESTORE DATABASE analytics
+  FROM S3('https://storage.googleapis.com/<bucket>/clickhouse/analytics/daily/2026/09/29/dump_20260929_040000.tar.zst', '<key>', '<secret>');
+
+-- restore next to the original, for inspection
+RESTORE DATABASE analytics AS analytics_restored FROM S3('<same url>', '<key>', '<secret>');
+
+-- full-instance archive: everything, including users/roles/grants
+RESTORE ALL FROM S3('<url of the full-instance archive>', '<key>', '<secret>')
+  SETTINGS allow_non_empty_tables = 1;   -- only if you really want to append into existing tables
+```
+
+Useful settings: `structure_only=1`, `allow_different_database_def=1`, `allow_different_table_def=1`, `create_database='if not exists'`. Progress in `system.backups` (add `ASYNC` for long restores).

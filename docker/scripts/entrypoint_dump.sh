@@ -47,11 +47,13 @@ elif [ "$DB_TYPE" = "mariadb" ]; then
   echo "[DEBUG] MARIADB_VERSION: ${MARIADB_VERSION:-11.4}"
 elif [ "$DB_TYPE" = "mongodb" ]; then
   echo "[DEBUG] MongoDB tools will be installed"
+elif [ "$DB_TYPE" = "clickhouse" ]; then
+  echo "[DEBUG] ClickHouse: server-side BACKUP over HTTP (curl), no client to install"
 fi
 
 # Validate required variables
 if [ -z "$DB_TYPE" ]; then
-    error_msg="DB_TYPE must be specified (postgresql, mysql, mariadb or mongodb)"
+    error_msg="DB_TYPE must be specified (postgresql, mysql, mariadb, mongodb or clickhouse)"
     echo "Error: $error_msg"
     notify_failure "$error_msg" "Configuration validation failed in entrypoint"
     exit 1
@@ -102,6 +104,15 @@ case "$DB_TYPE" in
             exit 1
         fi
         echo "MongoDB tools version: $(mongodump --version | head -n 1)"
+        ;;
+    "clickhouse")
+        if ! command -v curl &> /dev/null; then
+            error_msg="curl not found in the image"
+            echo "Error: $error_msg"
+            notify_failure "$error_msg" "ClickHouse backup needs curl (HTTP interface)"
+            exit 1
+        fi
+        echo "curl version: $(curl --version | head -n 1)"
         ;;
 esac
 

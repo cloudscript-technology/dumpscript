@@ -3,11 +3,12 @@ set -e
 set -o pipefail
 
 # Wait for all variables to be set in the environment
-# DB_TYPE (mysql, mariadb, postgresql or mongodb), DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
+# DB_TYPE (mysql, mariadb, postgresql, mongodb or clickhouse), DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
 # STORAGE_BACKEND ("s3" or "azure", default: "s3")
 # S3 backend: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, AWS_ROLE_ARN, AWS_REGION, S3_BUCKET, S3_PREFIX
 # Azure backend: AZURE_STORAGE_ACCOUNT, AZURE_STORAGE_KEY or AZURE_STORAGE_SAS_TOKEN, AZURE_STORAGE_CONTAINER, AZURE_STORAGE_PREFIX
-# PERIODICITY, DUMP_OPTIONS (specific options for mysqldump, mariadb-dump or pg_dump)
+# PERIODICITY, DUMP_OPTIONS (specific options for mysqldump, mariadb-dump or pg_dump; BACKUP SETTINGS for clickhouse)
+# clickhouse: server-side BACKUP over HTTP, see clickhouse_backup.sh for the CLICKHOUSE_* variables
 # SLACK_WEBHOOK_URL (optional) - Slack webhook URL for notifications
 # SLACK_CHANNEL (optional) - Specific channel to send messages
 # SLACK_USERNAME (optional) - Username that will appear as sender
@@ -55,7 +56,7 @@ if [ "$(storage_get_backend)" = "s3" ]; then
 fi
 
 if [ -z "$DB_TYPE" ]; then
-  error_msg="DB_TYPE must be specified (mysql, mariadb, postgresql or mongodb)"
+  error_msg="DB_TYPE must be specified (mysql, mariadb, postgresql, mongodb or clickhouse)"
   echo "Error: $error_msg"
   notify_failure "$error_msg" "Configuration validation failed"
   exit 1
@@ -80,7 +81,6 @@ if [ "$(storage_get_backend)" = "s3" ]; then
 fi
 
 # Create data structure for S3 path
-CURRENT_DATE=$(date +%Y-%m-%d)
 YEAR=$(date +%Y)
 MONTH=$(date +%m)
 DAY=$(date +%d)
@@ -93,8 +93,16 @@ case "$DB_TYPE" in
   "mongodb")
     DUMP_EXT="archive"
     ;;
+  "clickhouse")
+    # Server-side BACKUP ... TO S3()/AzureBlobStorage(): no local file, handled entirely by clickhouse_backup.sh
+    if [ -f "/usr/local/bin/clickhouse_backup.sh" ]; then
+      exec /usr/local/bin/clickhouse_backup.sh
+    else
+      exec "$(dirname "$0")/clickhouse_backup.sh"
+    fi
+    ;;
   *)
-    error_msg="DB_TYPE must be 'mysql', 'mariadb', 'postgresql' or 'mongodb', received: $DB_TYPE"
+    error_msg="DB_TYPE must be 'mysql', 'mariadb', 'postgresql', 'mongodb' or 'clickhouse', received: $DB_TYPE"
     echo "Error: $error_msg"
     notify_failure "$error_msg" "Invalid database type configuration"
     exit 1
@@ -234,7 +242,7 @@ case "$DB_TYPE" in
     fi
     ;;
   *)
-    error_msg="DB_TYPE must be 'mysql', 'mariadb', 'postgresql' or 'mongodb', received: $DB_TYPE"
+    error_msg="DB_TYPE must be 'mysql', 'mariadb', 'postgresql', 'mongodb' or 'clickhouse', received: $DB_TYPE"
     echo "Error: $error_msg"
     notify_failure "$error_msg" "Invalid database type configuration"
     exit 1

@@ -28,6 +28,7 @@ COPY ./scripts/notify_slack.sh /usr/local/bin/notify_slack.sh
 COPY ./scripts/s3_upload_with_refresh.sh /usr/local/bin/s3_upload_with_refresh.sh
 COPY ./scripts/storage_utils.sh /usr/local/bin/storage_utils.sh
 COPY ./scripts/aws_role_utils.sh /usr/local/bin/aws_role_utils.sh
+COPY ./scripts/clickhouse_backup.sh /usr/local/bin/clickhouse_backup.sh
 
 # Grant execution permissions
 RUN chmod +x /usr/local/bin/dump_db_to_s3.sh \
@@ -37,14 +38,16 @@ RUN chmod +x /usr/local/bin/dump_db_to_s3.sh \
     && chmod +x /usr/local/bin/notify_slack.sh \
     && chmod +x /usr/local/bin/s3_upload_with_refresh.sh \
     && chmod +x /usr/local/bin/storage_utils.sh \
-    && chmod +x /usr/local/bin/aws_role_utils.sh
+    && chmod +x /usr/local/bin/aws_role_utils.sh \
+    && chmod +x /usr/local/bin/clickhouse_backup.sh
 
 # Expects all variables to be set in the environment
-# DB_TYPE (mysql, mariadb, postgresql or mongodb), DB_HOST, DB_PORT, DB_USER, DB_PASSWORD
+# DB_TYPE (mysql, mariadb, postgresql, mongodb or clickhouse), DB_HOST, DB_PORT, DB_USER, DB_PASSWORD
 # STORAGE_BACKEND ("s3" or "azure", default: "s3")
 # S3 backend: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, AWS_ROLE_ARN, AWS_REGION, S3_BUCKET, S3_PREFIX
 # Azure backend: AZURE_STORAGE_ACCOUNT, AZURE_STORAGE_KEY or AZURE_STORAGE_SAS_TOKEN, AZURE_STORAGE_CONTAINER, AZURE_STORAGE_PREFIX
-# PERIODICITY, DUMP_OPTIONS (specific options for mysqldump, mariadb-dump or pg_dump)
+# PERIODICITY, DUMP_OPTIONS (specific options for mysqldump, mariadb-dump or pg_dump; BACKUP SETTINGS for clickhouse)
+# clickhouse: CLICKHOUSE_SECURE, CLICKHOUSE_ARCHIVE_FORMAT, CLICKHOUSE_EXCLUDE_DATABASES, CLICKHOUSE_BACKUP_TIMEOUT (see scripts/clickhouse_backup.sh)
 # SLACK_WEBHOOK_URL (optional), SLACK_CHANNEL (optional), SLACK_USERNAME (optional), SLACK_NOTIFY_SUCCESS (optional)
 
 ENTRYPOINT ["/usr/local/bin/entrypoint_dump.sh"]

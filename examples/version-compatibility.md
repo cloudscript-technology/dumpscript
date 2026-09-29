@@ -90,6 +90,10 @@ The container will now:
 - `10.11` - For MariaDB 10.11 servers
 - `11.4` - For MariaDB 11.4 servers
 
+### ClickHouse
+- No client version to pick: the backup is a native `BACKUP ... TO S3()` executed by the server over HTTP.
+- Server must be **>= 24.3** (tar archives). `version` in the chart is informational only.
+
 ## Important Tips
 
 1. **Always use the matching major version**: If your server is 16.2, use `version: "16"`

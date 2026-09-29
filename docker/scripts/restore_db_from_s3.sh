@@ -56,6 +56,10 @@ case "$DB_TYPE" in
     storage_download "$S3_KEY" "$RESTORE_FILE_GZ"
     gunzip -f "$RESTORE_FILE_GZ"
     ;;
+  "clickhouse")
+    echo "Error: automated restore is not implemented for clickhouse. Use RESTORE ... FROM S3(...) on the server (see README)."
+    exit 1
+    ;;
   "mongodb")
     RESTORE_FILE_GZ="dump_restore.archive.gz"
     storage_download "$S3_KEY" "$RESTORE_FILE_GZ"
