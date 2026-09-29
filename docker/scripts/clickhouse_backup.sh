@@ -42,6 +42,7 @@ notify_failure() {
     if [ -f "/usr/local/bin/notify_slack.sh" ]; then
         /usr/local/bin/notify_slack.sh failure "$error_msg" "$context" || true
         export NOTIFICATION_SENT=true
+        touch "${NOTIFY_MARKER:-/tmp/dumpscript.notified}" 2>/dev/null || true
     fi
 }
 
@@ -84,6 +85,13 @@ if ! storage_validate_config; then
     fail "Storage configuration is invalid" "Check STORAGE_BACKEND and the backend variables"
 fi
 
+# Identifiers: refuse anything that is not a plain database name (also blocks SQL injection via env)
+_ident_re='^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$'
+if [ -n "${DB_NAME:-}" ] && ! [[ "$DB_NAME" =~ $_ident_re ]]; then
+    fail "DB_NAME contains unsupported characters (allowed: letters, digits, '_', '.', '-')" "Configuration validation failed"
+fi
+case "${DB_USER}${DB_PASSWORD:-}" in *$'\n'*|*$'\r'*) fail "DB_USER/DB_PASSWORD must not contain line breaks" "Configuration validation failed" ;; esac
+
 CLICKHOUSE_SECURE="${CLICKHOUSE_SECURE:-false}"
 CLICKHOUSE_ARCHIVE_FORMAT="${CLICKHOUSE_ARCHIVE_FORMAT:-tar.zst}"
 CLICKHOUSE_EXCLUDE_DATABASES="${CLICKHOUSE_EXCLUDE_DATABASES:-system,information_schema,INFORMATION_SCHEMA}"
@@ -116,9 +124,11 @@ chmod 600 "$CURL_CFG" "$CURL_OUT"
 cleanup_tmp() { rm -f "$CURL_CFG" "$CURL_OUT"; }
 trap cleanup_tmp EXIT
 
+# curl config syntax: values are double-quoted, so escape backslash and double quote
+curl_cfg_escape() { local v="$1" bs='\' dq='"'; v="${v//"$bs"/$bs$bs}"; v="${v//"$dq"/$bs$dq}"; printf '%s' "$v"; }
 {
-    printf 'header = "X-ClickHouse-User: %s"\n' "$DB_USER"
-    printf 'header = "X-ClickHouse-Key: %s"\n' "${DB_PASSWORD:-}"
+    printf 'header = "X-ClickHouse-User: %s"\n' "$(curl_cfg_escape "$DB_USER")"
+    printf 'header = "X-ClickHouse-Key: %s"\n' "$(curl_cfg_escape "${DB_PASSWORD:-}")"
     printf 'header = "X-ClickHouse-Format: TSVRaw"\n'
     printf 'silent\nshow-error\n'
     printf 'connect-timeout = 15\n'
@@ -128,6 +138,17 @@ trap cleanup_tmp EXIT
     fi
 } > "$CURL_CFG"
 
+# Replace every known secret value by *** before anything reaches the log (server errors may echo the
+# rejected statement, which carries the storage credentials)
+mask_secrets() {
+    local out="$1" secret
+    for secret in "${AWS_SECRET_ACCESS_KEY:-}" "${AWS_ACCESS_KEY_ID:-}" "${AWS_SESSION_TOKEN:-}" \
+                  "${AZURE_STORAGE_KEY:-}" "${AZURE_STORAGE_SAS_TOKEN:-}" "${DB_PASSWORD:-}"; do
+        [ -n "$secret" ] && out="${out//"$secret"/***}"
+    done
+    printf '%s' "$out" | sed -E "s/(S3\('[^']*',)[^)]*\)/\1 '***', '***')/g; s/(AccountKey|SharedAccessSignature)=[^;']*/\1=***/g"
+}
+
 # ch_query <sql>  -> prints the response body; returns 1 on HTTP/transport error
 ch_query() {
     local sql="$1"
@@ -136,7 +157,7 @@ ch_query() {
     http_code=$(curl -K "$CURL_CFG" -X POST --data-binary "$sql" -o "$CURL_OUT" -w '%{http_code}' "$CH_URL" 2>>"$CURL_OUT") || true
     if [ "$http_code" != "200" ]; then
         echo "[clickhouse] HTTP $http_code from server:" >&2
-        head -c 4000 "$CURL_OUT" >&2
+        mask_secrets "$(head -c 4000 "$CURL_OUT")" >&2
         echo >&2
         return 1
     fi
@@ -156,6 +177,7 @@ sql_str() {
 sql_ident() {
     local v="$1"
     local bs='\' bt='`'
+    v="${v//"$bs"/$bs$bs}"
     v="${v//"$bt"/$bs$bt}"
     printf '`%s`' "$v"
 }
@@ -249,6 +271,7 @@ else
     for db in "${_excluded[@]}"; do
         db=$(echo "$db" | tr -d '[:space:]')
         [ -z "$db" ] && continue
+        [[ "$db" =~ $_ident_re ]] || fail "CLICKHOUSE_EXCLUDE_DATABASES entry has unsupported characters: $db" "Configuration validation failed"
         EXCEPT_LIST="${EXCEPT_LIST:+$EXCEPT_LIST, }$(sql_ident "$db")"
     done
     SOURCE="ALL"
@@ -261,6 +284,10 @@ fi
 
 SETTINGS="id = $(sql_str "$BACKUP_ID")"
 if [ -n "${DUMP_OPTIONS:-}" ]; then
+    # Only `name = value` pairs are accepted here (no arbitrary SQL)
+    _kv="[a-z_0-9]+[[:space:]]*=[[:space:]]*'?[A-Za-z0-9_.-]+'?"
+    [[ "$DUMP_OPTIONS" =~ ^[[:space:]]*${_kv}([[:space:]]*,[[:space:]]*${_kv})*[[:space:]]*$ ]] \
+        || fail "DUMP_OPTIONS for clickhouse must be a comma-separated list of setting=value pairs, received: $(mask_secrets "$DUMP_OPTIONS")" "Configuration validation failed"
     SETTINGS="${SETTINGS}, ${DUMP_OPTIONS}"
 fi
 

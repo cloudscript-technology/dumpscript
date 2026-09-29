@@ -90,7 +90,7 @@ See [ClickHouse](#clickhouse-1) below for grants, network and restore.
 | `DB_USER` | Database username |
 | `DB_PASSWORD` | Database password |
 | `PERIODICITY` | Backup periodicity (`daily`, `weekly`, `monthly`, `yearly`) |
-| `RETENTION_DAYS` | Number of days to retain backups |
+| `RETENTION_DAYS` | Number of days to retain backups (cleanup runs **after** a successful dump) |
 
 #### Storage Backend
 
@@ -136,7 +136,8 @@ See [ClickHouse](#clickhouse-1) below for grants, network and restore.
 | `MYSQL_VERSION` | MySQL client version (`5.7` or `8.0`) — dumps with `mysqldump` |
 | `MARIADB_VERSION` | MariaDB client version (default: `11.4`) — dumps with `mariadb-dump` |
 | `DB_PORT` | Database port (default: 5432 for PostgreSQL, 3306 for MySQL, 27017 for MongoDB, 8123 for ClickHouse HTTP) |
-| `DB_NAME` | Database name (if omitted, dumps all databases in the instance) |
+| `DB_NAME` | Database name (if omitted, dumps all databases in the instance). Allowed characters: letters, digits, `_`, `.`, `-` — anything else is rejected (prevents SQL/connection-string/option injection) |
+| `RETENTION_MIN_KEEP` | Never delete the N most recent backups of the periodicity, whatever `RETENTION_DAYS` says (default: `1`) |
 | `DUMP_OPTIONS` | Additional options for the dump command (e.g., `--authenticationDatabase=admin`). For `clickhouse` it is appended to the `BACKUP ... SETTINGS` clause (e.g. `allow_s3_native_copy=0, deduplicate_files=1`) |
 
 #### ClickHouse Options (optional, `DB_TYPE=clickhouse`)
@@ -667,6 +668,14 @@ notifications:
 6. **Storage Upload**: The dump is uploaded to the configured storage backend using [rclone](https://rclone.org/), which handles multipart uploads, retries, and chunked transfers automatically. For `clickhouse` the **server** writes the archive to the bucket (`BACKUP ... TO S3()`/`AzureBlobStorage()` in `ASYNC` mode); the job polls `system.backups`, then confirms the object exists with rclone
 7. **Path Structure**: Backups are stored at `<prefix>/<periodicity>/<year>/<month>/<day>/<dump_file>` (e.g., `daily/2025/03/24/dump_20250324_120000.sql.gz`; ClickHouse: `dump_20250324_120000.tar.zst`)
 8. **Notifications**: Optional Slack notifications for backup status
+
+## Security Notes
+
+- Credentials never go on a command line: storage keys reach `rclone` through `RCLONE_*` environment variables, the MongoDB password through a private `--config` file, the ClickHouse password through a curl config file (mode 600) and the Slack webhook URL through curl's stdin config. Nothing sensitive shows up in `ps`/`/proc/*/cmdline`.
+- Values that could carry credentials (`DUMP_OPTIONS`, ClickHouse server errors) are masked before being logged.
+- `DB_NAME` (and ClickHouse database lists) are validated as plain identifiers; ClickHouse `DUMP_OPTIONS` must be `setting=value` pairs.
+- Retention runs only after a successful upload and always keeps the `RETENTION_MIN_KEEP` most recent objects, so a broken dump can never wipe the history.
+- Known gaps (see the security review in the repository issues/PRs): HTTP without TLS by default for ClickHouse (`CLICKHOUSE_SECURE=true` when the network is not trusted), restore trusts the archive content (`psql`/`mysql` meta-commands), dump image runs as root and installs clients at runtime.
 
 ## Storage Requirements
 

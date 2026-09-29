@@ -73,6 +73,32 @@ storage_get_prefix() {
     esac
 }
 
+# Export credentials for rclone through environment variables instead of command-line
+# flags, so they never show up in /proc/<pid>/cmdline, `ps` or runtime-security argv logs.
+# Called right before every rclone invocation (credentials may have been refreshed).
+_storage_export_credentials() {
+    case "$(storage_get_backend)" in
+        s3)
+            export RCLONE_S3_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-}"
+            export RCLONE_S3_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-}"
+            if [ -n "${AWS_SESSION_TOKEN:-}" ]; then
+                export RCLONE_S3_SESSION_TOKEN="$AWS_SESSION_TOKEN"
+            else
+                unset RCLONE_S3_SESSION_TOKEN
+            fi
+            ;;
+        azure)
+            if [ -n "${AZURE_STORAGE_SAS_TOKEN:-}" ]; then
+                export RCLONE_AZUREBLOB_SAS_URL="$AZURE_STORAGE_SAS_TOKEN"
+                unset RCLONE_AZUREBLOB_KEY
+            elif [ -n "${AZURE_STORAGE_KEY:-}" ]; then
+                export RCLONE_AZUREBLOB_KEY="$AZURE_STORAGE_KEY"
+                unset RCLONE_AZUREBLOB_SAS_URL
+            fi
+            ;;
+    esac
+}
+
 # Build rclone flags for the configured backend
 _storage_rclone_flags() {
     local backend=$(storage_get_backend)
@@ -98,22 +124,14 @@ _storage_rclone_flags() {
 
             echo "--s3-provider=$provider"
             echo "--s3-region=${AWS_REGION:-us-east-1}"
-            echo "--s3-access-key-id=${AWS_ACCESS_KEY_ID:-}"
-            echo "--s3-secret-access-key=${AWS_SECRET_ACCESS_KEY:-}"
-            if [ -n "$AWS_SESSION_TOKEN" ]; then
-                echo "--s3-session-token=$AWS_SESSION_TOKEN"
-            fi
+            # credentials are exported as RCLONE_S3_* by _storage_export_credentials (never on argv)
             if [ -n "$endpoint_flag" ]; then
                 echo "$endpoint_flag"
             fi
             ;;
         azure)
             echo "--azureblob-account=${AZURE_STORAGE_ACCOUNT}"
-            if [ -n "$AZURE_STORAGE_SAS_TOKEN" ]; then
-                echo "--azureblob-sas-url=${AZURE_STORAGE_SAS_TOKEN}"
-            elif [ -n "$AZURE_STORAGE_KEY" ]; then
-                echo "--azureblob-key=${AZURE_STORAGE_KEY}"
-            fi
+            # credentials are exported as RCLONE_AZUREBLOB_* by _storage_export_credentials (never on argv)
             ;;
         *)
             storage_log "ERROR: Unknown storage backend: $backend"
@@ -316,6 +334,7 @@ storage_upload() {
         fi
 
         # Execute rclone upload
+        _storage_export_credentials
         # shellcheck disable=SC2086
         if rclone copyto "$file_path" "$remote" \
             --config="" \
@@ -371,6 +390,7 @@ storage_download() {
     storage_log "Source: $remote"
     storage_log "Destination: $local_file"
 
+    _storage_export_credentials
     # shellcheck disable=SC2086
     if rclone copyto "$remote" "$local_file" \
         --config="" \
@@ -400,6 +420,7 @@ storage_list() {
     storage_log "Listing objects in $backend storage at: $prefix"
 
     # Use rclone lsjson for structured output, then normalize with jq
+    _storage_export_credentials
     # shellcheck disable=SC2086
     rclone lsjson "$remote_root/$prefix" \
         --config="" \
@@ -422,6 +443,7 @@ storage_delete() {
 
     storage_log "Deleting from $backend storage: $remote"
 
+    _storage_export_credentials
     # shellcheck disable=SC2086
     if rclone deletefile "$remote" \
         --config="" \

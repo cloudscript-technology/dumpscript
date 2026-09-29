@@ -78,10 +78,9 @@ send_failure_notification() {
     echo "Sending Slack notification..."
     
     # Send to Slack
-    if curl -s -X POST \
+    if printf 'url = "%s"\n' "$SLACK_WEBHOOK_URL" | curl -s -K - -X POST \
         -H 'Content-type: application/json' \
-        --data "$payload" \
-        "$SLACK_WEBHOOK_URL" > /dev/null; then
+        --data "$payload" > /dev/null; then
         echo "Slack notification sent successfully."
     else
         echo "Failed to send Slack notification."
@@ -151,10 +150,9 @@ send_success_notification() {
     echo "Sending Slack success notification..."
     
     # Send to Slack
-    if curl -s -X POST \
+    if printf 'url = "%s"\n' "$SLACK_WEBHOOK_URL" | curl -s -K - -X POST \
         -H 'Content-type: application/json' \
-        --data "$payload" \
-        "$SLACK_WEBHOOK_URL" > /dev/null; then
+        --data "$payload" > /dev/null; then
         echo "Slack success notification sent successfully."
     else
         echo "Failed to send Slack success notification."
