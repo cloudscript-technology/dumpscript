@@ -10,6 +10,7 @@
     "test:aws:down": "docker compose -f tests/aws/docker-compose.yml down -v",
     "test:azure:down": "docker compose -f tests/azure/docker-compose.yml down -v",
     "test:clickhouse": "docker compose -f tests/clickhouse/docker-compose.yml --env-file tests/clickhouse/.env up --build --abort-on-container-exit --exit-code-from dumpscript",
+    "test:clickhouse:incremental": "bash tests/clickhouse/incremental.sh",
     "test:clickhouse:down": "docker compose -f tests/clickhouse/docker-compose.yml --env-file tests/clickhouse/.env down -v"
   }
 }

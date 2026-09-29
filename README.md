@@ -12,7 +12,7 @@ Database dump and restore tool with configurable client versions.
 - Support for PostgreSQL, MySQL/MariaDB, MongoDB and ClickHouse databases
 - **Multiple storage backends** - S3-compatible storage (AWS, MinIO) and Azure Blob Storage
 - **Runtime configurable database client versions** - No need to rebuild images
-- **ClickHouse native backups** - server-side `BACKUP ... TO S3()/AzureBlobStorage()` as a single archive, no local disk
+- **ClickHouse native backups** - server-side `BACKUP ... TO S3()/AzureBlobStorage()` as a single archive, no local disk; full + incremental (`base_backup`) per periodicity
 - **Multiple backup schedules** - Support for daily, weekly, monthly, and yearly backups per database
 - **Slack notifications** - Optional notifications for backup status
 - Automatic upload of database dumps to configured storage backend
@@ -152,6 +152,7 @@ See [ClickHouse](#clickhouse-1) below for grants, network and restore.
 | `CLICKHOUSE_BACKUP_TIMEOUT` | `21600` | Seconds to wait for the server-side backup (6h) |
 | `CLICKHOUSE_BACKUP_POLL_INTERVAL` | `15` | Seconds between `system.backups` polls |
 | `CLICKHOUSE_USE_SERVER_CREDENTIALS` | `false` | Emit `S3('<url>')` without keys; the server authenticates with its own S3 configuration |
+| `CLICKHOUSE_BASE_BACKUP_PERIODICITY` | — | Enables **incremental backups**: runs of this periodicity (e.g. `weekly`) are full; every other periodicity (e.g. `daily`) is incremental against the newest archive of it (`SETTINGS base_backup = ...`). No base found = full backup with a warning. See [ClickHouse incremental backups](#clickhouse-incremental-backups) |
 
 ### Docker Examples
 
@@ -885,6 +886,34 @@ GRANT READ, WRITE ON S3 TO backup;             -- destination S3()/GCS; ClickHou
 ```
 
 Also allow egress from the ClickHouse pods to the storage endpoint (NetworkPolicy / firewall) and, in Kubernetes, the DumpScript namespace to reach the ClickHouse HTTP port.
+
+### ClickHouse incremental backups
+
+Set `CLICKHOUSE_BASE_BACKUP_PERIODICITY` to the periodicity that holds the full backups. Runs of that
+periodicity are full; runs of any other periodicity look up the **newest archive of the base periodicity**
+under the same prefix and send `SETTINGS base_backup = S3('<base url>'), use_same_s3_credentials_for_base_backup = 1`
+(Azure: `base_backup = AzureBlobStorage(...)`). Example with the Helm chart: `weekly` (full, Sunday) +
+`daily` (incremental, Monday–Saturday), both with `CLICKHOUSE_BASE_BACKUP_PERIODICITY=weekly`.
+
+- Every incremental is taken against the latest **full**, never against the previous incremental: a
+  restore needs at most two archives (the full and the chosen incremental).
+- **Retention rule:** the base periodicity must keep its archives at least as long as the incremental
+  periodicity **plus one full interval**, otherwise an incremental can outlive the base it depends on
+  (e.g. weekly `RETENTION_DAYS=42` for daily `RETENTION_DAYS=35`). Bucket lifecycle rules must not
+  expire objects before that either.
+- If no base archive exists yet (first run, or the base was deleted), the job takes a **full** backup
+  and logs a warning instead of failing.
+- The base reference is written by ClickHouse into the `.backup` metadata of the incremental archive
+  **without** the storage credentials (they are reused from the destination), so nothing sensitive
+  lands in the bucket, the job log or `system.query_log`.
+- Restoring from an incremental: point `RESTORE` at the incremental archive only and pass
+  `SETTINGS use_same_s3_credentials_for_base_backup = 1` so the server reads the base with the same key:
+
+```sql
+RESTORE DATABASE analytics AS analytics_restored
+  FROM S3('https://storage.googleapis.com/<bucket>/clickhouse/all/daily/2026/09/30/dump_20260930_040000.tar.zst', '<key>', '<secret>')
+  SETTINGS use_same_s3_credentials_for_base_backup = 1;
+```
 
 ### ClickHouse restore (manual)
 
