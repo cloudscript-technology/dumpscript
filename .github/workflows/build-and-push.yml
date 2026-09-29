@@ -69,7 +69,7 @@ jobs:
           git log ${LATEST_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges >> changelog.md || echo "- Initial release" >> changelog.md
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: Release ${{ steps.version.outputs.tag }}
@@ -118,7 +118,6 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=latest
             type=raw,value=${{ needs.create-release.outputs.version }}-alpine-3-20
             type=raw,value=${{ needs.create-release.outputs.tag }}-alpine-3-20
 
@@ -171,7 +170,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           build-args: |
-            ALPINE_VERSION=edge@sha256:9a341ff2287c54b86425cbee0141114d811ae69d88a36019087be6d896cef241
+            ALPINE_VERSION=edge@sha256:020dfcbaaf4cc1078bf2d9c7ba31a8466e334061dcd2f248001d68f79e52c000
           tags: ${{ steps.meta-alpine-edge.outputs.tags }}
           labels: ${{ steps.meta-alpine-edge.outputs.labels }}
           cache-from: type=gha
@@ -197,3 +196,38 @@ jobs:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.build_alpine_edge.outputs.digest }}
           push-to-registry: true
+
+  # Scan de imagem no mesmo padrão dos outros projetos (aquasec/trivy:0.58.1, --scanners vuln,
+  # --ignore-unfixed, HIGH/CRITICAL). BLOQUEANTE: o workflow falha se houver CVE com fix em qualquer variante.
+  image-scan:
+    needs: [create-release, build-and-push]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [alpine-3-21, alpine-3-20, alpine-edge]
+    container:
+      image: aquasec/trivy:0.58.1
+      options: --entrypoint ""
+    env:
+      TRIVY_CACHE_DIR: .trivycache
+      TRIVY_NO_PROGRESS: "true"
+      TRIVY_USERNAME: ${{ github.actor }}
+      TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Trivy DB cache
+        uses: actions/cache@v4
+        with:
+          path: .trivycache
+          key: trivy-db-dumpscript-${{ github.run_id }}
+          restore-keys: trivy-db-dumpscript-
+
+      - name: Scan image (Trivy)
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.create-release.outputs.tag }}-${{ matrix.variant }}"
+          echo "──────── Trivy scan: ${IMAGE} ────────"
+          trivy image --scanners vuln --ignore-unfixed --severity HIGH,CRITICAL \
+            --exit-code 1 --format table "${IMAGE}"

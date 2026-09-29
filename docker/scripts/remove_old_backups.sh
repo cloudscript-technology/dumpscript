@@ -77,12 +77,19 @@ if ! storage_list "${BACKUP_PATH}" >"$TMP_LIST" 2>"$TMP_ERR"; then
   exit 0
 fi
 
+# Safety net: never delete the RETENTION_MIN_KEEP most recent backups (by path), whatever the cutoff
+RETENTION_MIN_KEEP="${RETENTION_MIN_KEEP:-1}"
+TOTAL_BACKUPS=$(awk '{print $NF}' "$TMP_LIST" | grep -E -c '\.(sql|archive)(\.gz)?$|\.(tar|tar\.gz|tar\.zst|tgz|tzst)$' || true)
+DELETED=0
+echo "[DEBUG] Backups found: $TOTAL_BACKUPS (keeping at least $RETENTION_MIN_KEEP)"
+
+sort -k3 -r "$TMP_LIST" -o "$TMP_LIST"   # newest first (paths embed YYYY/MM/DD and the timestamp)
 while read -r line; do
-    # storage_list output format: "DATE  SIZE  PATH"
-    file_path=$(echo "$line" | awk '{print $3}')
+    # storage_list output format: "YYYY-MM-DD HH:MM:SS  SIZE  PATH" (date and time are two fields)
+    file_path=$(echo "$line" | awk '{print $NF}')
     [ -z "$file_path" ] && continue
-    # Only process files ending with .sql.gz or .archive.gz
-    if [[ ! "$file_path" =~ \.(sql|archive)(\.gz)?$ ]]; then
+    # Only process backup objects: .sql(.gz), .archive(.gz) or ClickHouse tar archives (.tar, .tar.gz, .tar.zst)
+    if [[ ! "$file_path" =~ \.(sql|archive)(\.gz)?$ ]] && [[ ! "$file_path" =~ \.(tar|tar\.gz|tar\.zst|tgz|tzst)$ ]]; then
         echo "[DEBUG] Skipping non-backup entry: $file_path"
         continue
     fi
@@ -96,6 +103,11 @@ while read -r line; do
     echo "[DEBUG] Checking file: $file_path (backup date: $backup_date) - $CUTOFF_DATE"
     # Compare dates
     if [[ "$backup_date" < "$CUTOFF_DATE" ]]; then
+        if [ $((TOTAL_BACKUPS - DELETED)) -le "$RETENTION_MIN_KEEP" ]; then
+            echo "Keeping $file_path: only $((TOTAL_BACKUPS - DELETED)) backup(s) left (RETENTION_MIN_KEEP=$RETENTION_MIN_KEEP)"
+            continue
+        fi
+        DELETED=$((DELETED + 1))
         DISPLAY_FILE=$(storage_display_path "$file_path")
         echo "[DEBUG] $backup_date < $CUTOFF_DATE: will remove"
         echo "Removing $DISPLAY_FILE (backup date: $backup_date)"

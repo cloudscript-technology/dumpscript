@@ -1,0 +1,77 @@
+services:
+  # S3-compatible object storage (MinIO images are no longer public; RustFS is a drop-in)
+  s3:
+    image: rustfs/rustfs:latest
+    environment:
+      RUSTFS_ACCESS_KEY: ${AWS_ACCESS_KEY_ID}
+      RUSTFS_SECRET_KEY: ${AWS_SECRET_ACCESS_KEY}
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: ":9000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/health || wget -q --spider http://localhost:9000/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:${CLICKHOUSE_VERSION:-26.8.10.6}
+    environment:
+      CLICKHOUSE_USER: admin
+      CLICKHOUSE_PASSWORD: admin
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+      # Backup user created by initdb/01-seed.sql
+      CH_BACKUP_USER: ${DB_USER}
+      CH_BACKUP_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  dumpscript:
+    build:
+      context: ../../docker
+      dockerfile: Dockerfile.dump
+      args:
+        ALPINE_VERSION: edge
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      s3:
+        condition: service_healthy
+    # The bucket is created here (rclone is part of the image) because a separate init
+    # service would trigger --abort-on-container-exit as soon as it finished.
+    entrypoint:
+      - /bin/bash
+      - -c
+      - >-
+        if [ "$$AWS_S3_ENDPOINT_URL" = "http://s3:9000" ]; then rclone mkdir ":s3:${S3_BUCKET}" --config="" --s3-provider=Other --s3-endpoint="$$AWS_S3_ENDPOINT_URL" --s3-force-path-style=true --s3-access-key-id="$$AWS_ACCESS_KEY_ID" --s3-secret-access-key="$$AWS_SECRET_ACCESS_KEY"; fi && exec /usr/local/bin/entrypoint_dump.sh
+    env_file:
+      - .env
+    environment:
+      STORAGE_BACKEND: s3
+      # Point AWS_S3_ENDPOINT_URL (in .env) to https://storage.googleapis.com to test against real GCS (HMAC key)
+      AWS_S3_ENDPOINT_URL: ${AWS_S3_ENDPOINT_URL:-http://s3:9000}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      S3_BUCKET: ${S3_BUCKET}
+      S3_PREFIX: ${S3_PREFIX}
+      DB_TYPE: clickhouse
+      DB_HOST: clickhouse
+      DB_PORT: ${DB_PORT:-8123}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      # Empty DB_NAME = full instance (databases + users/roles/grants/named collections)
+      DB_NAME: ${DB_NAME}
+      PERIODICITY: ${PERIODICITY:-daily}
+      RETENTION_DAYS: ${RETENTION_DAYS:-7}
+      DUMP_OPTIONS: ${DUMP_OPTIONS}
+      CLICKHOUSE_ARCHIVE_FORMAT: ${CLICKHOUSE_ARCHIVE_FORMAT:-tar.zst}
+      CLICKHOUSE_BACKUP_POLL_INTERVAL: ${CLICKHOUSE_BACKUP_POLL_INTERVAL:-3}

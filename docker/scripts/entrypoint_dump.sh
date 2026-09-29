@@ -47,19 +47,17 @@ elif [ "$DB_TYPE" = "mariadb" ]; then
   echo "[DEBUG] MARIADB_VERSION: ${MARIADB_VERSION:-11.4}"
 elif [ "$DB_TYPE" = "mongodb" ]; then
   echo "[DEBUG] MongoDB tools will be installed"
+elif [ "$DB_TYPE" = "clickhouse" ]; then
+  echo "[DEBUG] ClickHouse: server-side BACKUP over HTTP (curl), no client to install"
 fi
 
 # Validate required variables
 if [ -z "$DB_TYPE" ]; then
-    error_msg="DB_TYPE must be specified (postgresql, mysql, mariadb or mongodb)"
+    error_msg="DB_TYPE must be specified (postgresql, mysql, mariadb, mongodb or clickhouse)"
     echo "Error: $error_msg"
     notify_failure "$error_msg" "Configuration validation failed in entrypoint"
     exit 1
 fi
-
-# Remove old backups that are outside the retention period
-echo "Removing old backups..."
-/usr/local/bin/remove_old_backups.sh
 
 # Install database clients
 echo "Installing database clients..."
@@ -103,10 +101,34 @@ case "$DB_TYPE" in
         fi
         echo "MongoDB tools version: $(mongodump --version | head -n 1)"
         ;;
+    "clickhouse")
+        if ! command -v curl &> /dev/null; then
+            error_msg="curl not found in the image"
+            echo "Error: $error_msg"
+            notify_failure "$error_msg" "ClickHouse backup needs curl (HTTP interface)"
+            exit 1
+        fi
+        echo "curl version: $(curl --version | head -n 1)"
+        ;;
 esac
 
 echo "Database clients installed successfully!"
 echo "=== Starting Database Dump ==="
 
-# Execute the dump script
-exec /usr/local/bin/dump_db_to_s3.sh
+# Execute the dump script (as a child: retention only runs after a SUCCESSFUL dump, so a broken
+# dump can never keep deleting old backups until nothing is left)
+NOTIFY_MARKER="${NOTIFY_MARKER:-/tmp/dumpscript.notified}"
+export NOTIFY_MARKER
+rm -f "$NOTIFY_MARKER"
+set +e
+/usr/local/bin/dump_db_to_s3.sh
+rc=$?
+set -e
+if [ $rc -ne 0 ]; then
+    [ -f "$NOTIFY_MARKER" ] && export NOTIFICATION_SENT=true
+    exit $rc
+fi
+
+# Remove old backups that are outside the retention period
+echo "Removing old backups..."
+/usr/local/bin/remove_old_backups.sh

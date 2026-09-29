@@ -7,6 +7,7 @@ set -e
 # - MYSQL_VERSION: MySQL client version (8.0)
 # - MARIADB_VERSION: MariaDB client version (10.11, 11.4)
 # - MongoDB tools: installed without version pinning (mongodump, mongorestore)
+# - ClickHouse: no client (backup runs on the server over HTTP)
 
 echo "Installing database clients based on environment variables..."
 echo "[DEBUG] DB_TYPE: $DB_TYPE"
@@ -22,6 +23,9 @@ case "$DB_TYPE" in
         ;;
     "mongodb")
         echo "MongoDB tools will be installed (mongodump/mongorestore)"
+        ;;
+    "clickhouse")
+        echo "ClickHouse: no client needed (server-side BACKUP over HTTP with curl)"
         ;;
 esac
 
@@ -121,8 +125,11 @@ case "$DB_TYPE" in
     "mongodb")
         install_mongodb_tools
         ;;
+    "clickhouse")
+        echo "ClickHouse: nothing to install"
+        ;;
     *)
-        echo "Error: DB_TYPE must be 'postgresql', 'mysql', 'mariadb' or 'mongodb', received: $DB_TYPE"
+        echo "Error: DB_TYPE must be 'postgresql', 'mysql', 'mariadb', 'mongodb' or 'clickhouse', received: $DB_TYPE"
         exit 1
         ;;
 esac

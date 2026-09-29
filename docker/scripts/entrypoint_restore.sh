@@ -18,6 +18,10 @@ elif [ "$DB_TYPE" = "mariadb" ]; then
   echo "[DEBUG] MARIADB_VERSION: ${MARIADB_VERSION:-11.4}"
 elif [ "$DB_TYPE" = "mongodb" ]; then
   echo "[DEBUG] MongoDB tools will be installed"
+elif [ "$DB_TYPE" = "clickhouse" ]; then
+  echo "Error: automated restore is not implemented for clickhouse."
+  echo "Run it on the server: RESTORE DATABASE <db> FROM S3('<url of the .tar.zst>', '<key>', '<secret>') -- see README (ClickHouse restore)"
+  exit 1
 fi
 
 case "$DB_TYPE" in
@@ -37,7 +41,7 @@ esac
 
 # Validate required variables
 if [ -z "$DB_TYPE" ]; then
-    echo "Error: DB_TYPE must be specified (postgresql, mysql, mariadb or mongodb)"
+    echo "Error: DB_TYPE must be specified (postgresql, mysql, mariadb or mongodb; clickhouse restore is manual)"
     exit 1
 fi
 

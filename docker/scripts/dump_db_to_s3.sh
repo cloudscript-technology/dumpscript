@@ -3,11 +3,12 @@ set -e
 set -o pipefail
 
 # Wait for all variables to be set in the environment
-# DB_TYPE (mysql, mariadb, postgresql or mongodb), DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
+# DB_TYPE (mysql, mariadb, postgresql, mongodb or clickhouse), DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
 # STORAGE_BACKEND ("s3" or "azure", default: "s3")
 # S3 backend: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, AWS_ROLE_ARN, AWS_REGION, S3_BUCKET, S3_PREFIX
 # Azure backend: AZURE_STORAGE_ACCOUNT, AZURE_STORAGE_KEY or AZURE_STORAGE_SAS_TOKEN, AZURE_STORAGE_CONTAINER, AZURE_STORAGE_PREFIX
-# PERIODICITY, DUMP_OPTIONS (specific options for mysqldump, mariadb-dump or pg_dump)
+# PERIODICITY, DUMP_OPTIONS (specific options for mysqldump, mariadb-dump or pg_dump; BACKUP SETTINGS for clickhouse)
+# clickhouse: server-side BACKUP over HTTP, see clickhouse_backup.sh for the CLICKHOUSE_* variables
 # SLACK_WEBHOOK_URL (optional) - Slack webhook URL for notifications
 # SLACK_CHANNEL (optional) - Specific channel to send messages
 # SLACK_USERNAME (optional) - Username that will appear as sender
@@ -20,6 +21,7 @@ notify_failure() {
     if [ -f "/usr/local/bin/notify_slack.sh" ]; then
         /usr/local/bin/notify_slack.sh failure "$error_msg" "$context" || true
         export NOTIFICATION_SENT=true
+        touch "${NOTIFY_MARKER:-/tmp/dumpscript.notified}" 2>/dev/null || true
     fi
 }
 
@@ -55,7 +57,7 @@ if [ "$(storage_get_backend)" = "s3" ]; then
 fi
 
 if [ -z "$DB_TYPE" ]; then
-  error_msg="DB_TYPE must be specified (mysql, mariadb, postgresql or mongodb)"
+  error_msg="DB_TYPE must be specified (mysql, mariadb, postgresql, mongodb or clickhouse)"
   echo "Error: $error_msg"
   notify_failure "$error_msg" "Configuration validation failed"
   exit 1
@@ -67,6 +69,21 @@ if [ -z "$PERIODICITY" ]; then
   notify_failure "$error_msg" "Configuration validation failed"
   exit 1
 fi
+
+# DB_NAME is used as an identifier and as a positional argument to the clients: refuse anything that
+# could be parsed as SQL, as a connection string (psql "host=... dbname=...") or as an option ("-x").
+if [ -n "${DB_NAME:-}" ] && ! [[ "$DB_NAME" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+  error_msg="DB_NAME contains unsupported characters (allowed: letters, digits, '_', '.', '-'; must not start with '-' or '.')"
+  echo "Error: $error_msg"
+  notify_failure "$error_msg" "Configuration validation failed"
+  exit 1
+fi
+
+# Mask credentials that may appear inside DUMP_OPTIONS (e.g. --uri="mongodb://user:pass@host", --password=x)
+mask_options() {
+  printf '%s' "$1" | sed -E 's#://[^@[:space:]/]*@#://***@#g; s/(--?(password|pwd|passwd)[= ])[^[:space:]]+/\1***/g'
+}
+DUMP_OPTIONS_MASKED=$(mask_options "${DUMP_OPTIONS:-}")
 
 # Assume AWS role if AWS_ROLE_ARN is defined (initial authentication, S3 backend only)
 if [ "$(storage_get_backend)" = "s3" ]; then
@@ -80,7 +97,6 @@ if [ "$(storage_get_backend)" = "s3" ]; then
 fi
 
 # Create data structure for S3 path
-CURRENT_DATE=$(date +%Y-%m-%d)
 YEAR=$(date +%Y)
 MONTH=$(date +%m)
 DAY=$(date +%d)
@@ -93,8 +109,16 @@ case "$DB_TYPE" in
   "mongodb")
     DUMP_EXT="archive"
     ;;
+  "clickhouse")
+    # Server-side BACKUP ... TO S3()/AzureBlobStorage(): no local file, handled entirely by clickhouse_backup.sh
+    if [ -f "/usr/local/bin/clickhouse_backup.sh" ]; then
+      exec /usr/local/bin/clickhouse_backup.sh
+    else
+      exec "$(dirname "$0")/clickhouse_backup.sh"
+    fi
+    ;;
   *)
-    error_msg="DB_TYPE must be 'mysql', 'mariadb', 'postgresql' or 'mongodb', received: $DB_TYPE"
+    error_msg="DB_TYPE must be 'mysql', 'mariadb', 'postgresql', 'mongodb' or 'clickhouse', received: $DB_TYPE"
     echo "Error: $error_msg"
     notify_failure "$error_msg" "Invalid database type configuration"
     exit 1
@@ -140,7 +164,7 @@ case "$DB_TYPE" in
       fi
     fi
     if [ -n "$DB_NAME" ]; then
-      echo "[DEBUG] Command: $DUMP_CMD $DUMP_OPTIONS -h $DB_HOST -P ${DB_PORT:-3306} -u $DB_USER $DB_NAME | gzip > $DUMP_FILE_GZ"
+      echo "[DEBUG] Command: $DUMP_CMD $DUMP_OPTIONS_MASKED -h $DB_HOST -P ${DB_PORT:-3306} -u $DB_USER $DB_NAME | gzip > $DUMP_FILE_GZ"
       echo "Executing $DUMP_CMD..."
       if ! $DUMP_CMD $DUMP_OPTIONS -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" "$DB_NAME" | gzip > "$DUMP_FILE_GZ"; then
         error_msg="$DUMP_CMD execution failed"
@@ -150,7 +174,7 @@ case "$DB_TYPE" in
         exit 1
       fi
     else
-      echo "[DEBUG] Command: $DUMP_CMD $DUMP_OPTIONS --all-databases -h $DB_HOST -P ${DB_PORT:-3306} -u $DB_USER | gzip > $DUMP_FILE_GZ"
+      echo "[DEBUG] Command: $DUMP_CMD $DUMP_OPTIONS_MASKED --all-databases -h $DB_HOST -P ${DB_PORT:-3306} -u $DB_USER | gzip > $DUMP_FILE_GZ"
       echo "Executing $DUMP_CMD (all databases)..."
       if ! $DUMP_CMD $DUMP_OPTIONS --all-databases -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" | gzip > "$DUMP_FILE_GZ"; then
         error_msg="$DUMP_CMD execution failed (all databases)"
@@ -164,7 +188,7 @@ case "$DB_TYPE" in
   "mariadb")
     export MYSQL_PWD="$DB_PASSWORD"
     if [ -n "$DB_NAME" ]; then
-      echo "[DEBUG] Command: mariadb-dump $DUMP_OPTIONS -h $DB_HOST -P ${DB_PORT:-3306} -u $DB_USER $DB_NAME | gzip > $DUMP_FILE_GZ"
+      echo "[DEBUG] Command: mariadb-dump $DUMP_OPTIONS_MASKED -h $DB_HOST -P ${DB_PORT:-3306} -u $DB_USER $DB_NAME | gzip > $DUMP_FILE_GZ"
       echo "Executing mariadb-dump..."
       if ! mariadb-dump $DUMP_OPTIONS -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" "$DB_NAME" | gzip > "$DUMP_FILE_GZ"; then
         error_msg="mariadb-dump execution failed"
@@ -174,7 +198,7 @@ case "$DB_TYPE" in
         exit 1
       fi
     else
-      echo "[DEBUG] Command: mariadb-dump $DUMP_OPTIONS --all-databases -h $DB_HOST -P ${DB_PORT:-3306} -u $DB_USER | gzip > $DUMP_FILE_GZ"
+      echo "[DEBUG] Command: mariadb-dump $DUMP_OPTIONS_MASKED --all-databases -h $DB_HOST -P ${DB_PORT:-3306} -u $DB_USER | gzip > $DUMP_FILE_GZ"
       echo "Executing mariadb-dump (all databases)..."
       if ! mariadb-dump $DUMP_OPTIONS --all-databases -h "$DB_HOST" -P "${DB_PORT:-3306}" -u "$DB_USER" | gzip > "$DUMP_FILE_GZ"; then
         error_msg="mariadb-dump execution failed (all databases)"
@@ -188,9 +212,9 @@ case "$DB_TYPE" in
   "postgresql")
     export PGPASSWORD="$DB_PASSWORD"
     if [ -n "$DB_NAME" ]; then
-      echo "[DEBUG] Command: pg_dump $DUMP_OPTIONS -h $DB_HOST -p ${DB_PORT:-5432} -U $DB_USER $DB_NAME | gzip > $DUMP_FILE_GZ"
+      echo "[DEBUG] Command: pg_dump $DUMP_OPTIONS_MASKED -h $DB_HOST -p ${DB_PORT:-5432} -U $DB_USER $DB_NAME | gzip > $DUMP_FILE_GZ"
       echo "Executing pg_dump (single database)..."
-      if ! pg_dump $DUMP_OPTIONS -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "$DB_USER" "$DB_NAME" | gzip > "$DUMP_FILE_GZ"; then
+      if ! pg_dump $DUMP_OPTIONS -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "$DB_USER" -- "$DB_NAME" | gzip > "$DUMP_FILE_GZ"; then
         error_msg="pg_dump execution failed"
         echo "Error: $error_msg"
         notify_failure "$error_msg" "PostgreSQL dump process failed - check database connectivity and credentials"
@@ -198,7 +222,7 @@ case "$DB_TYPE" in
         exit 1
       fi
     else
-      echo "[DEBUG] Command: pg_dumpall $DUMP_OPTIONS -h $DB_HOST -p ${DB_PORT:-5432} -U $DB_USER | gzip > $DUMP_FILE_GZ"
+      echo "[DEBUG] Command: pg_dumpall $DUMP_OPTIONS_MASKED -h $DB_HOST -p ${DB_PORT:-5432} -U $DB_USER | gzip > $DUMP_FILE_GZ"
       echo "Executing pg_dumpall (all databases)..."
       if ! pg_dumpall $DUMP_OPTIONS -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "$DB_USER" | gzip > "$DUMP_FILE_GZ"; then
         error_msg="pg_dumpall execution failed"
@@ -210,11 +234,16 @@ case "$DB_TYPE" in
     fi
     ;;
   "mongodb")
+    # Password goes through a private --config file (mode 600) instead of the command line,
+    # so it never appears in `ps` / /proc/<pid>/cmdline.
+    MONGO_CFG=$(mktemp) && chmod 600 "$MONGO_CFG"
+    printf "password: '%s'\n" "${DB_PASSWORD//\'/\'\'}" > "$MONGO_CFG"
+    trap 'rm -f "$MONGO_CFG"' EXIT
     # mongodump outputs to stdout when using --archive; --gzip compresses the output
     if [ -n "$DB_NAME" ]; then
-      echo "[DEBUG] Command: mongodump $DUMP_OPTIONS --host $DB_HOST --port ${DB_PORT:-27017} --username $DB_USER --password ****** --db $DB_NAME --archive --gzip > $DUMP_FILE_GZ"
+      echo "[DEBUG] Command: mongodump $DUMP_OPTIONS_MASKED --host $DB_HOST --port ${DB_PORT:-27017} --username $DB_USER --config <file> --db $DB_NAME --archive --gzip > $DUMP_FILE_GZ"
       echo "Executing mongodump..."
-      if ! mongodump $DUMP_OPTIONS --host "$DB_HOST" --port "${DB_PORT:-27017}" --username "$DB_USER" --password "$DB_PASSWORD" --db "$DB_NAME" --archive --gzip > "$DUMP_FILE_GZ"; then
+      if ! mongodump $DUMP_OPTIONS --host "$DB_HOST" --port "${DB_PORT:-27017}" --username "$DB_USER" --config "$MONGO_CFG" --db "$DB_NAME" --archive --gzip > "$DUMP_FILE_GZ"; then
         error_msg="mongodump execution failed"
         echo "Error: $error_msg"
         notify_failure "$error_msg" "MongoDB dump process failed - check database connectivity and credentials"
@@ -222,9 +251,9 @@ case "$DB_TYPE" in
         exit 1
       fi
     else
-      echo "[DEBUG] Command: mongodump $DUMP_OPTIONS --host $DB_HOST --port ${DB_PORT:-27017} --username $DB_USER --password ****** --archive --gzip > $DUMP_FILE_GZ"
+      echo "[DEBUG] Command: mongodump $DUMP_OPTIONS_MASKED --host $DB_HOST --port ${DB_PORT:-27017} --username $DB_USER --config <file> --archive --gzip > $DUMP_FILE_GZ"
       echo "Executing mongodump (all databases)..."
-      if ! mongodump $DUMP_OPTIONS --host "$DB_HOST" --port "${DB_PORT:-27017}" --username "$DB_USER" --password "$DB_PASSWORD" --archive --gzip > "$DUMP_FILE_GZ"; then
+      if ! mongodump $DUMP_OPTIONS --host "$DB_HOST" --port "${DB_PORT:-27017}" --username "$DB_USER" --config "$MONGO_CFG" --archive --gzip > "$DUMP_FILE_GZ"; then
         error_msg="mongodump execution failed (all databases)"
         echo "Error: $error_msg"
         notify_failure "$error_msg" "MongoDB full instance dump failed - check permissions and connectivity"
@@ -234,7 +263,7 @@ case "$DB_TYPE" in
     fi
     ;;
   *)
-    error_msg="DB_TYPE must be 'mysql', 'mariadb', 'postgresql' or 'mongodb', received: $DB_TYPE"
+    error_msg="DB_TYPE must be 'mysql', 'mariadb', 'postgresql', 'mongodb' or 'clickhouse', received: $DB_TYPE"
     echo "Error: $error_msg"
     notify_failure "$error_msg" "Invalid database type configuration"
     exit 1

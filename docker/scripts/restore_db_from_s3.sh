@@ -8,6 +8,17 @@ set -e
 # Azure backend: AZURE_STORAGE_ACCOUNT, AZURE_STORAGE_KEY or AZURE_STORAGE_SAS_TOKEN, AZURE_STORAGE_CONTAINER, S3_KEY
 # CREATE_DB (optional)
 
+notify_failure() { :; }
+
+# DB_NAME is used as an identifier and as a positional argument to the clients: refuse anything that
+# could be parsed as SQL, as a connection string (psql "host=... dbname=...") or as an option ("-x").
+if [ -n "${DB_NAME:-}" ] && ! [[ "$DB_NAME" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+  error_msg="DB_NAME contains unsupported characters (allowed: letters, digits, '_', '.', '-'; must not start with '-' or '.')"
+  echo "Error: $error_msg"
+  notify_failure "$error_msg" "Configuration validation failed"
+  exit 1
+fi
+
 if [ -z "$DB_TYPE" ]; then
   echo "Error: DB_TYPE must be specified (mysql, mariadb, postgresql or mongodb)"
   exit 1
@@ -55,6 +66,10 @@ case "$DB_TYPE" in
     RESTORE_FILE_GZ="dump_restore.sql.gz"
     storage_download "$S3_KEY" "$RESTORE_FILE_GZ"
     gunzip -f "$RESTORE_FILE_GZ"
+    ;;
+  "clickhouse")
+    echo "Error: automated restore is not implemented for clickhouse. Use RESTORE ... FROM S3(...) on the server (see README)."
+    exit 1
     ;;
   "mongodb")
     RESTORE_FILE_GZ="dump_restore.archive.gz"
@@ -119,22 +134,27 @@ case "$DB_TYPE" in
         echo "Creating PostgreSQL database $DB_NAME..."
         psql -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "$DB_USER" -d postgres -c "CREATE DATABASE \"$DB_NAME\";" || echo "Database already exists."
       fi
-      psql -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "$DB_USER" "$DB_NAME" < dump_restore.sql
+      psql -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "$DB_USER" -- "$DB_NAME" < dump_restore.sql
     else
       echo "Restoring full PostgreSQL instance (pg_dumpall)..."
       psql -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "$DB_USER" -d postgres < dump_restore.sql
     fi
     ;;
   "mongodb")
+    # Password goes through a private --config file (mode 600) instead of the command line,
+    # so it never appears in `ps` / /proc/<pid>/cmdline.
+    MONGO_CFG=$(mktemp) && chmod 600 "$MONGO_CFG"
+    printf "password: '%s'\n" "${DB_PASSWORD//\'/\'\'}" > "$MONGO_CFG"
+    trap 'rm -f "$MONGO_CFG"' EXIT
     echo "Restoring MongoDB archive..."
     # mongorestore can read gzipped archive when --gzip is provided
     if [ -n "$DB_NAME" ]; then
-      if ! mongorestore --host "$DB_HOST" --port "${DB_PORT:-27017}" --username "$DB_USER" --password "$DB_PASSWORD" --db "$DB_NAME" --archive --gzip < "$RESTORE_FILE_GZ"; then
+      if ! mongorestore --host "$DB_HOST" --port "${DB_PORT:-27017}" --username "$DB_USER" --config "$MONGO_CFG" --db "$DB_NAME" --archive --gzip < "$RESTORE_FILE_GZ"; then
         echo "Error: mongorestore failed"
         exit 1
       fi
     else
-      if ! mongorestore --host "$DB_HOST" --port "${DB_PORT:-27017}" --username "$DB_USER" --password "$DB_PASSWORD" --archive --gzip < "$RESTORE_FILE_GZ"; then
+      if ! mongorestore --host "$DB_HOST" --port "${DB_PORT:-27017}" --username "$DB_USER" --config "$MONGO_CFG" --archive --gzip < "$RESTORE_FILE_GZ"; then
         echo "Error: mongorestore failed (full instance)"
         exit 1
       fi
