@@ -91,6 +91,18 @@ mais um S3 local (RustFS — as imagens do MinIO deixaram de ser públicas). O d
 **Contra o GCS real**: descomente o bloco no fim do `.env` (endpoint `https://storage.googleapis.com`,
 HMAC key, bucket existente). O upload é feito pelo servidor ClickHouse, então este é o caminho de produção.
 
+**Incremental (full semanal + incremental diário)** — cenário completo automatizado:
+
+```bash
+npm run test:clickhouse:incremental
+```
+
+Sobe o stack, faz um `weekly` (full), insere linhas, faz um `daily` com
+`CLICKHOUSE_BASE_BACKUP_PERIODICITY=weekly` (incremental contra o full), confere que o archive é menor,
+que o `.backup` do incremental referencia o base **sem** a chave de storage, restaura só a partir do
+incremental (`RESTORE ... SETTINGS use_same_s3_credentials_for_base_backup = 1`) e compara com o dado vivo,
+e por fim confirma o fallback para full quando a periodicidade-base não tem archives.
+
 **Validar o restore** (com o stack de pé, `docker compose ... up -d s3 clickhouse`):
 
 ```bash

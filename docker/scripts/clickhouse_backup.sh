@@ -24,6 +24,10 @@ set -o pipefail
 #   CLICKHOUSE_BACKUP_POLL_INTERVAL     seconds between system.backups polls (default: 15)
 #   CLICKHOUSE_USE_SERVER_CREDENTIALS   "true" to emit S3('<url>') without keys and let the server
 #                                       authenticate with its own configuration (default: false)
+#   CLICKHOUSE_BASE_BACKUP_PERIODICITY  periodicity whose newest archive is used as `base_backup`
+#                                       (incremental backup). Runs of that periodicity are full;
+#                                       any other periodicity is incremental against it. Empty
+#                                       (default) = always full. No base found = full + warning.
 #   DUMP_OPTIONS                        appended to the BACKUP `SETTINGS` clause
 #                                       (e.g. "allow_s3_native_copy=0, deduplicate_files=1")
 #
@@ -99,6 +103,11 @@ CLICKHOUSE_BACKUP_ACCESS_ENTITIES="${CLICKHOUSE_BACKUP_ACCESS_ENTITIES:-true}"
 CLICKHOUSE_BACKUP_TIMEOUT="${CLICKHOUSE_BACKUP_TIMEOUT:-21600}"
 CLICKHOUSE_BACKUP_POLL_INTERVAL="${CLICKHOUSE_BACKUP_POLL_INTERVAL:-15}"
 CLICKHOUSE_USE_SERVER_CREDENTIALS="${CLICKHOUSE_USE_SERVER_CREDENTIALS:-false}"
+CLICKHOUSE_BASE_BACKUP_PERIODICITY="${CLICKHOUSE_BASE_BACKUP_PERIODICITY:-}"
+
+if [ -n "$CLICKHOUSE_BASE_BACKUP_PERIODICITY" ] && ! [[ "$CLICKHOUSE_BASE_BACKUP_PERIODICITY" =~ ^[a-z]+$ ]]; then
+    fail "CLICKHOUSE_BASE_BACKUP_PERIODICITY must be a periodicity name (daily, weekly, monthly, yearly), received: $CLICKHOUSE_BASE_BACKUP_PERIODICITY" "Configuration validation failed"
+fi
 
 case "$CLICKHOUSE_ARCHIVE_FORMAT" in
     tar|tar.gz|tar.zst) ;;
@@ -224,11 +233,15 @@ VERIFY_WITH_RCLONE=true
 case "$(storage_get_backend)" in
     s3)
         [ -n "$S3_BUCKET" ] || fail "S3_BUCKET must be specified" "Configuration validation failed"
-        if [ -n "${AWS_S3_ENDPOINT_URL:-}" ]; then
-            S3_URL="${AWS_S3_ENDPOINT_URL%/}/${S3_BUCKET}/${REMOTE_PATH}"
-        else
-            S3_URL="https://s3.${AWS_REGION:-us-east-1}.amazonaws.com/${S3_BUCKET}/${REMOTE_PATH}"
-        fi
+        # s3_url <relative path> -> full URL used in the S3() table function
+        s3_url() {
+            if [ -n "${AWS_S3_ENDPOINT_URL:-}" ]; then
+                printf '%s' "${AWS_S3_ENDPOINT_URL%/}/${S3_BUCKET}/$1"
+            else
+                printf '%s' "https://s3.${AWS_REGION:-us-east-1}.amazonaws.com/${S3_BUCKET}/$1"
+            fi
+        }
+        S3_URL=$(s3_url "$REMOTE_PATH")
         if [ "$CLICKHOUSE_USE_SERVER_CREDENTIALS" = "true" ]; then
             DESTINATION="S3($(sql_str "$S3_URL"))"
             DESTINATION_MASKED="S3('$S3_URL')"
@@ -261,6 +274,54 @@ case "$(storage_get_backend)" in
 esac
 
 # ---------------------------------------------------------------------------
+# Incremental: base_backup = newest archive of CLICKHOUSE_BASE_BACKUP_PERIODICITY.
+# Every incremental is taken against the latest FULL of the base periodicity (never against the
+# previous incremental), so a restore needs at most two archives. The base periodicity must keep
+# its archives at least as long as the incremental ones plus one full interval.
+# ---------------------------------------------------------------------------
+BACKUP_MODE="full"
+BASE_BACKUP_PATH=""
+BASE_SETTINGS=""
+BASE_SETTINGS_MASKED=""
+if [ -n "$CLICKHOUSE_BASE_BACKUP_PERIODICITY" ]; then
+    if [ "$PERIODICITY" = "$CLICKHOUSE_BASE_BACKUP_PERIODICITY" ]; then
+        echo "[incremental] PERIODICITY=$PERIODICITY is the base periodicity: taking a full backup"
+    elif [ "$VERIFY_WITH_RCLONE" != "true" ]; then
+        echo "[WARN] No storage credentials in the job (CLICKHOUSE_USE_SERVER_CREDENTIALS=true): cannot look up the base backup, taking a full backup"
+    else
+        BASE_DIR="${STORAGE_PREFIX}/${CLICKHOUSE_BASE_BACKUP_PERIODICITY}/"
+        echo "[incremental] Looking for the newest ${CLICKHOUSE_BASE_BACKUP_PERIODICITY} archive under $(storage_display_path "$BASE_DIR")"
+        BASE_LIST=$(storage_list "$BASE_DIR" 2>/dev/null || true)
+        # paths embed YYYY/MM/DD/dump_YYYYMMDD_HHMMSS.<ext>, so the lexicographic maximum is the newest
+        BASE_BACKUP_PATH=$(printf '%s\n' "$BASE_LIST" | awk '{print $NF}' | grep -E '\.(tar|tar\.gz|tar\.zst|tgz|tzst)$' | sort | tail -n 1 || true)
+        if [ -z "$BASE_BACKUP_PATH" ]; then
+            echo "[WARN] No base backup found under $(storage_display_path "$BASE_DIR"): taking a full backup (the next ${CLICKHOUSE_BASE_BACKUP_PERIODICITY} run creates the base)"
+        elif ! [[ "$BASE_BACKUP_PATH" =~ ^[A-Za-z0-9_./-]+$ ]]; then
+            fail "Base backup path has unsupported characters: $BASE_BACKUP_PATH" "Refusing to build a BACKUP statement from an unexpected object key"
+        else
+            BACKUP_MODE="incremental"
+            case "$(storage_get_backend)" in
+                s3)
+                    BASE_URL=$(s3_url "$BASE_BACKUP_PATH")
+                    # The key pair is not repeated: the server reuses the destination credentials
+                    # (use_same_s3_credentials_for_base_backup), so it is not written to the log,
+                    # to system.query_log or to the .backup metadata of the incremental archive.
+                    BASE_SETTINGS=", base_backup = S3($(sql_str "$BASE_URL"))"
+                    [ "$CLICKHOUSE_USE_SERVER_CREDENTIALS" = "true" ] || BASE_SETTINGS="${BASE_SETTINGS}, use_same_s3_credentials_for_base_backup = 1"
+                    BASE_SETTINGS_MASKED="$BASE_SETTINGS"
+                    ;;
+                azure)
+                    BASE_SETTINGS=", base_backup = AzureBlobStorage($(sql_str "$AZURE_CONN"), $(sql_str "$AZURE_STORAGE_CONTAINER"), $(sql_str "$BASE_BACKUP_PATH"))"
+                    BASE_SETTINGS_MASKED=", base_backup = AzureBlobStorage('***', '$AZURE_STORAGE_CONTAINER', '$BASE_BACKUP_PATH')"
+                    ;;
+            esac
+            echo "[incremental] Base backup: $(storage_display_path "$BASE_BACKUP_PATH")"
+        fi
+    fi
+fi
+echo "[DEBUG] Backup mode: $BACKUP_MODE"
+
+# ---------------------------------------------------------------------------
 # Source
 # ---------------------------------------------------------------------------
 if [ -n "${DB_NAME:-}" ]; then
@@ -282,17 +343,19 @@ else
     fi
 fi
 
-SETTINGS="id = $(sql_str "$BACKUP_ID")"
+SETTINGS="id = $(sql_str "$BACKUP_ID")${BASE_SETTINGS}"
+SETTINGS_MASKED="id = $(sql_str "$BACKUP_ID")${BASE_SETTINGS_MASKED}"
 if [ -n "${DUMP_OPTIONS:-}" ]; then
     # Only `name = value` pairs are accepted here (no arbitrary SQL)
     _kv="[a-z_0-9]+[[:space:]]*=[[:space:]]*'?[A-Za-z0-9_.-]+'?"
     [[ "$DUMP_OPTIONS" =~ ^[[:space:]]*${_kv}([[:space:]]*,[[:space:]]*${_kv})*[[:space:]]*$ ]] \
         || fail "DUMP_OPTIONS for clickhouse must be a comma-separated list of setting=value pairs, received: $(mask_secrets "$DUMP_OPTIONS")" "Configuration validation failed"
     SETTINGS="${SETTINGS}, ${DUMP_OPTIONS}"
+    SETTINGS_MASKED="${SETTINGS_MASKED}, ${DUMP_OPTIONS}"
 fi
 
 BACKUP_SQL="BACKUP ${SOURCE} TO ${DESTINATION} SETTINGS ${SETTINGS} ASYNC"
-echo "[DEBUG] Query: BACKUP ${SOURCE} TO ${DESTINATION_MASKED} SETTINGS ${SETTINGS} ASYNC"
+echo "[DEBUG] Query: BACKUP ${SOURCE} TO ${DESTINATION_MASKED} SETTINGS ${SETTINGS_MASKED} ASYNC"
 echo "Destination path: $DISPLAY_PATH"
 
 # ---------------------------------------------------------------------------
@@ -354,7 +417,7 @@ while true; do
     sleep "$CLICKHOUSE_BACKUP_POLL_INTERVAL"
 done
 
-echo "Backup created on the server: $NUM_FILES files, $TOTAL_SIZE bytes (compressed: $COMPRESSED_SIZE bytes)"
+echo "Backup created on the server ($BACKUP_MODE): $NUM_FILES files, $TOTAL_SIZE bytes (compressed: $COMPRESSED_SIZE bytes)"
 
 # ---------------------------------------------------------------------------
 # Verify the object exists in the storage (from the job's point of view)
@@ -378,5 +441,10 @@ else
 fi
 
 DUMP_SIZE="${OBJECT_SIZE:-${COMPRESSED_SIZE:-0}}"
-echo "Dump completed successfully: $DISPLAY_PATH"
-notify_success "$DISPLAY_PATH" "$DUMP_SIZE"
+if [ "$BACKUP_MODE" = "incremental" ]; then
+    echo "Dump completed successfully (incremental, base: $(storage_display_path "$BASE_BACKUP_PATH")): $DISPLAY_PATH"
+    notify_success "$DISPLAY_PATH (incremental of $(storage_display_path "$BASE_BACKUP_PATH"))" "$DUMP_SIZE"
+else
+    echo "Dump completed successfully (full): $DISPLAY_PATH"
+    notify_success "$DISPLAY_PATH" "$DUMP_SIZE"
+fi
