@@ -151,6 +151,7 @@ See [ClickHouse](#clickhouse-1) below for grants, network and restore.
 | `CLICKHOUSE_BACKUP_ACCESS_ENTITIES` | `true` | Include users, roles, grants, quotas, settings profiles, row policies, functions and named collections on a full-instance backup |
 | `CLICKHOUSE_BACKUP_TIMEOUT` | `21600` | Seconds to wait for the server-side backup (6h) |
 | `CLICKHOUSE_BACKUP_POLL_INTERVAL` | `15` | Seconds between `system.backups` polls |
+| `CLICKHOUSE_CLUSTER` | _(empty)_ | Cluster name (`system.clusters`) to poll `system.backups` on all replicas via `clusterAllReplicas()`. Set it when `DB_HOST` is a Service balancing several replicas: `system.backups` is local to each server, so without it the poll can miss the replica running the backup ("Lost track") even though the backup succeeds |
 | `CLICKHOUSE_USE_SERVER_CREDENTIALS` | `false` | Emit `S3('<url>')` without keys; the server authenticates with its own S3 configuration |
 | `CLICKHOUSE_BASE_BACKUP_PERIODICITY` | — | Enables **incremental backups**: runs of this periodicity (e.g. `weekly`) are full; every other periodicity (e.g. `daily`) is incremental against the newest archive of it (`SETTINGS base_backup = ...`). No base found = full backup with a warning. See [ClickHouse incremental backups](#clickhouse-incremental-backups) |
 
@@ -883,6 +884,7 @@ GRANT BACKUP, SHOW ON *.* TO backup;
 GRANT SELECT ON system.backups TO backup;      -- polling the ASYNC status
 GRANT READ, WRITE ON S3 TO backup;             -- destination S3()/GCS; ClickHouse < 25.7: GRANT S3 ON *.*
 -- Azure destination: GRANT AZURE ON *.* TO backup;
+-- Only with CLICKHOUSE_CLUSTER (polling every replica via clusterAllReplicas): GRANT REMOTE ON *.* TO backup;
 ```
 
 Also allow egress from the ClickHouse pods to the storage endpoint (NetworkPolicy / firewall) and, in Kubernetes, the DumpScript namespace to reach the ClickHouse HTTP port.
