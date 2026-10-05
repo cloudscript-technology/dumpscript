@@ -22,6 +22,13 @@ set -o pipefail
 #                                       named collections on full-instance backups (default: true)
 #   CLICKHOUSE_BACKUP_TIMEOUT           seconds to wait for the backup (default: 21600 = 6h)
 #   CLICKHOUSE_BACKUP_POLL_INTERVAL     seconds between system.backups polls (default: 15)
+#   CLICKHOUSE_CLUSTER                  cluster name (as in system.clusters) to poll system.backups
+#                                       on ALL replicas via clusterAllReplicas(). Required when DB_HOST
+#                                       is a load-balanced Service in front of several replicas:
+#                                       system.backups is local to each server, so the poll may hit a
+#                                       replica other than the one running the ASYNC backup. Needs
+#                                       `GRANT REMOTE ON *.*` for the backup user (clusterAllReplicas).
+#                                       Empty (default) = poll the server that answers the request.
 #   CLICKHOUSE_USE_SERVER_CREDENTIALS   "true" to emit S3('<url>') without keys and let the server
 #                                       authenticate with its own configuration (default: false)
 #   CLICKHOUSE_BASE_BACKUP_PERIODICITY  periodicity whose newest archive is used as `base_backup`
@@ -368,7 +375,16 @@ fi
 echo "[DEBUG] Submit response: $(echo "$SUBMIT_OUT" | tr '\t' ' ')"
 
 # TSV (escaped) so an empty/multi-line error never shifts the columns; parsed with awk -F'\t'
-POLL_SQL="SELECT status, if(error = '', '-', replaceRegexpAll(error, '[\\r\\n\\t]+', ' ')), num_files, total_size, compressed_size FROM system.backups WHERE id = $(sql_str "$BACKUP_ID") FORMAT TSV"
+if [ -n "${CLICKHOUSE_CLUSTER:-}" ]; then
+    # system.backups is per-server: look for the id on every replica (unreachable ones are skipped)
+    BACKUPS_TABLE="clusterAllReplicas($(sql_str "$CLICKHOUSE_CLUSTER"), system.backups)"
+    POLL_SETTINGS=" SETTINGS skip_unavailable_shards = 1"
+    echo "[DEBUG] Polling system.backups on all replicas of cluster '$CLICKHOUSE_CLUSTER'"
+else
+    BACKUPS_TABLE="system.backups"
+    POLL_SETTINGS=""
+fi
+POLL_SQL="SELECT status, if(error = '', '-', replaceRegexpAll(error, '[\\r\\n\\t]+', ' ')), num_files, total_size, compressed_size FROM ${BACKUPS_TABLE} WHERE id = $(sql_str "$BACKUP_ID") LIMIT 1${POLL_SETTINGS} FORMAT TSV"
 START_TS=$(date +%s)
 MISSES=0
 STATUS=""
@@ -389,7 +405,7 @@ while true; do
         echo "[WARN] Poll failed ($MISSES/5), retrying..."
     elif [ -z "$ROW" ]; then
         MISSES=$((MISSES + 1))
-        echo "[WARN] Backup $BACKUP_ID not found in system.backups ($MISSES/5) - server restarted?"
+        echo "[WARN] Backup $BACKUP_ID not found in system.backups ($MISSES/5) - server restarted, or the poll hit another replica (set CLICKHOUSE_CLUSTER)?"
     else
         MISSES=0
         STATUS=$(echo "$ROW" | awk -F'\t' 'NR==1 {print $1}')
@@ -412,7 +428,7 @@ while true; do
 
     if [ "$MISSES" -ge 5 ]; then
         fail "Lost track of ClickHouse backup $BACKUP_ID (no row in system.backups / poll errors)" \
-             "The server may have restarted; check system.backup_log and the object at $DISPLAY_PATH before retrying"
+             "The server may have restarted, or DB_HOST is a load-balanced Service and the poll hit a replica other than the one running the backup (set CLICKHOUSE_CLUSTER); check system.backups on each replica, system.backup_log and the object at $DISPLAY_PATH before retrying"
     fi
     sleep "$CLICKHOUSE_BACKUP_POLL_INTERVAL"
 done
